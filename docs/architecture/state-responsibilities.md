@@ -16,6 +16,50 @@
 - 哪一层才是交互式会话的响应式状态。
 - 哪些状态是专用子系统，而不是统一 store 的一部分。
 
+### 1.1 Overview 视图
+
+```mermaid
+flowchart TD
+      Bootstrap["bootstrap/state.ts<br/>进程级身份与环境"]
+      AppState["state/<br/>会话级响应式状态"]
+      History["history.ts<br/>输入历史"]
+      Tasks["tasks/<br/>后台任务生命周期"]
+      SessionMemory["services/SessionMemory/<br/>当前会话摘要"]
+      UI["REPL / headless / remote 视图"]
+      Query["QueryEngine / compact"]
+
+      Bootstrap --> AppState
+      Bootstrap --> Query
+      AppState --> UI
+      History --> UI
+      Tasks --> AppState
+      SessionMemory --> Query
+```
+
+这张图强调状态的拥有者不是单一 store。不同状态面分别服务进程身份、会话渲染、输入恢复、后台任务和会话摘要。
+
+### 1.2 数据流视图
+
+```mermaid
+sequenceDiagram
+      participant Boot as 启动装配
+      participant Global as bootstrap/state.ts
+      participant Store as AppState
+      participant History as history.ts
+      participant Tasks as tasks/
+      participant Memory as SessionMemory
+
+      Boot->>Global: 初始化 session / cwd / mode / model
+      Boot->>Store: createStore(initialState)
+      Store-->>Boot: 提供响应式会话状态
+      Boot->>History: 注册输入历史与 flush
+      Tasks-->>Store: 回写任务进度与通知
+      Memory-->>Store: 触发必要的可见状态更新
+      Memory-->>Global: 为 compact 与恢复提供会话摘要边界
+```
+
+这条数据流说明状态不是沿一条链串行流动，而是由多个拥有者在不同生命周期内并行维护，再被会话主线按需读取。
+
 ## 2. 一句话结论
 
 这个项目的状态不是单一 store，而是五层分工：

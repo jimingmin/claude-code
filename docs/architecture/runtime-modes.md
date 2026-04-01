@@ -10,6 +10,40 @@
 
 重点不是 CLI 参数细节，而是它们分别把“本地 UI、会话控制权、工具执行位置、外部控制面”放在了哪里。
 
+### 1.1 Overview 视图
+
+```mermaid
+flowchart LR
+	Control["远端控制面"]
+	Bridge["bridge<br/>输出本地执行环境"]
+	LocalCore["本地 QueryEngine / tools"]
+	LocalUI["本地 REPL / headless 入口"]
+	Remote["remote<br/>远端会话客户端"]
+	Server["server / direct-connect<br/>通用远端客户端"]
+	RemoteCore["远端会话体系"]
+	ServerCore["远端 direct-connect 服务"]
+
+	Control --> Bridge --> LocalCore
+	LocalUI --> LocalCore
+	LocalUI --> Remote --> RemoteCore
+	LocalUI --> Server --> ServerCore
+```
+
+这张图关注的是控制权和执行位置，而不是命令名。`bridge` 把本地执行输出给远端控制面，`remote` 和 `server` 则把远端执行接回本地客户端。
+
+### 1.2 数据流视图
+
+```mermaid
+flowchart TD
+	Start["main.tsx 解析启动参数"] --> Mode{"运行模式"}
+	Mode -->|local| Local["本地 REPL -> QueryEngine -> 本地 tools"]
+	Mode -->|bridge| BridgePath["bridgeMain -> sessionRunner -> 本地 CLI 子进程"]
+	Mode -->|remote| RemotePath["RemoteSessionManager -> HTTP/WebSocket -> 远端 session"]
+	Mode -->|server| ServerPath["DirectConnectSessionManager -> 会话服务端"]
+```
+
+这条数据流只回答一个问题：`main.tsx` 在决定模式后，会把本地 UI 或 headless 入口接到哪一类会话后端上。
+
 ## 2. 一句话结论
 
 这三种模式不是同一件事的不同命名，而是三种不同的控制面关系：

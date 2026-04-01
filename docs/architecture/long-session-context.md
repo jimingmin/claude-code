@@ -18,6 +18,54 @@
 - 当前会话的摘要与长期记忆有什么区别。
 - 会话变长后，系统由谁决定压缩、由谁负责压缩后的重建。
 
+### 1.1 Overview 视图
+
+```mermaid
+flowchart TD
+  Prefix["context.ts + queryContext.ts<br/>稳定前缀"]
+  Instructions["utils/claudemd.ts<br/>CLAUDE.md / rules / memory files"]
+  Memdir["memdir/<br/>长期记忆索引与 relevant memories"]
+  SessionMem["services/SessionMemory/<br/>当前会话摘要"]
+  Compact["services/compact/<br/>压缩与重建"]
+  Query["QueryEngine / query"]
+
+  Prefix --> Query
+  Instructions --> Query
+  Memdir --> Query
+  Query --> SessionMem
+  Query --> Compact
+  SessionMem --> Compact
+  Compact --> Prefix
+```
+
+这张图强调长会话上下文由四层协作完成：稳定前缀、长期指令与记忆、当前会话摘要、压缩后重建。
+
+### 1.2 数据流视图
+
+```mermaid
+sequenceDiagram
+  participant QE as QueryEngine
+  participant QCtx as queryContext.ts
+  participant Ctx as context.ts
+  participant Cmd as claudemd.ts
+  participant Mem as memdir/
+  participant SM as SessionMemory
+  participant Comp as services/compact
+  participant Clean as postCompactCleanup
+
+  QE->>QCtx: fetchSystemPromptParts()
+  QCtx->>Ctx: getSystemContext() / getUserContext()
+  Ctx->>Cmd: 发现 CLAUDE.md / rules / memory files
+  Cmd-->>Ctx: 返回用户上下文前缀
+  QE->>Mem: 按需查找 relevant memories
+  QE->>SM: post-sampling 提炼会话摘要
+  QE->>Comp: 触发 auto compact 或 full compact
+  Comp->>Clean: 清理缓存并准备重建
+  Clean-->>QE: 下一轮重新装载稳定前缀与记忆
+```
+
+这条数据流回答的是长会话为什么不是简单截断历史，而是一次“前缀构建、摘要提炼、压缩重建”的循环。
+
 ## 2. 一句话结论
 
 Claude Code 的长会话上下文不是由一个“history 截断器”控制，而是由四层协作完成：

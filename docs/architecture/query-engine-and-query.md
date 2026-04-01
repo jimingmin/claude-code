@@ -10,6 +10,55 @@
 - 谁负责驱动单轮 agent 循环。
 - 两者如何通过统一上下文交接。
 
+### 1.1 Overview 视图
+
+```mermaid
+flowchart TD
+  Input["用户输入 / slash command / SDK 事件"]
+  QE["QueryEngine<br/>会话级状态拥有者"]
+  Query["query.ts<br/>单轮执行内核"]
+  Tools["services/tools<br/>工具执行编排"]
+  Persist["transcript / usage / compact boundary<br/>SDK / CLI 输出"]
+  SessionState["mutableMessages / readFileState / permissionDenials"]
+
+  Input --> QE
+  QE --> Query
+  Query --> Tools
+  Tools --> Query
+  Query --> QE
+  QE --> Persist
+  QE --> SessionState
+```
+
+这张图强调的是所有权边界：`QueryEngine` 持有会话级状态，`query.ts` 负责把当前轮次跑完整，工具执行只是内核中的一个阶段。
+
+### 1.2 数据流视图
+
+```mermaid
+sequenceDiagram
+  participant Client as 用户/SDK
+  participant QE as QueryEngine
+  participant Q as query.ts
+  participant Exec as services/tools
+  participant Store as transcript/状态
+
+  Client->>QE: submitMessage(...)
+  QE->>QE: processUserInput + 追加消息
+  QE->>Q: query(messages, ToolUseContext, settings)
+  loop 单轮执行
+    Q->>Q: 流式消费模型输出
+    alt 出现 tool_use
+      Q->>Exec: runTools / StreamingToolExecutor
+      Exec-->>Q: tool_result + contextModifier
+    end
+  end
+  Q-->>QE: yielded messages + terminal reason
+  QE->>Store: 写 transcript / usage / boundaries
+  QE-->>Client: 返回 CLI/SDK 结果
+```
+
+这条数据流回答的是一次用户输入如何从会话外壳进入单轮内核，再回到持久化与外部结果层。
+
 ## 2. 一句话结论
 
 `QueryEngine` 是“会话外壳”和“状态拥有者”，负责把一轮输入接入既有会话；`query` 是“单轮执行内核”，负责把当前输入跑完整个模型-工具-恢复-继续的闭环。

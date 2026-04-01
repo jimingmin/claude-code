@@ -14,6 +14,50 @@
 - 它们先被归一化成什么样的运行时对象。
 - 最终由哪些汇聚点把它们暴露给用户入口和会话内核。
 
+### 1.1 Overview 视图
+
+```mermaid
+flowchart LR
+  Skills["技能目录 / bundled skills"]
+  Plugins["插件目录 / manifest"]
+  MCP["外部 MCP server"]
+
+  SkillNorm["loadSkillsDir<br/>归一化为 Command"]
+  PluginNorm["pluginLoader / loadPluginCommands<br/>归一化为 LoadedPlugin 与 Command"]
+  McpNorm["services/mcp/client<br/>归一化为连接态能力视图"]
+
+  Aggregate["commands.ts + main.tsx + AppState<br/>运行时汇聚点"]
+  Consumers["slash command / QueryEngine / ToolUseContext"]
+
+  Skills --> SkillNorm --> Aggregate
+  Plugins --> PluginNorm --> Aggregate
+  MCP --> McpNorm --> Aggregate
+  Aggregate --> Consumers
+```
+
+这张图强调的是“统一能力装载面”并不是单个注册表，而是多种来源经过归一化后，在运行时形成几张并行的可消费视图。
+
+### 1.2 数据流视图
+
+```mermaid
+sequenceDiagram
+  participant Boot as main.tsx
+  participant Skills as loadSkillsDir
+  participant Plugins as pluginLoader / loadPluginCommands
+  participant MCP as services/mcp/client
+  participant Runtime as commands.ts / AppState / QueryEngine
+
+  Boot->>Skills: 装载 bundled、project、user skills
+  Boot->>Plugins: 发现插件并提取 commands / skills / hooks
+  Boot->>MCP: 建立 MCP 连接并发现 tools / resources
+  Skills-->>Runtime: Command 视图
+  Plugins-->>Runtime: LoadedPlugin 与 Command/Skill 视图
+  MCP-->>Runtime: tools / commands / resources
+  Runtime-->>Boot: 形成当前会话能力表面
+```
+
+这条数据流回答的是三类能力如何在启动装配阶段进入同一个运行时，并在后续会话中以不同视图被消费。
+
 ## 2. 一句话结论
 
 这个项目的“统一能力装载面”不是一个单独的总注册表，而是三类来源先被归一化，再汇聚成几张并行的运行时视图：

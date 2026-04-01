@@ -16,6 +16,47 @@
 - 本地、远端、同进程 teammate 为什么都要落到任务系统里。
 - coordinator mode 如何把主线程变成多代理控制面。
 
+### 1.1 Overview 视图
+
+```mermaid
+flowchart TD
+  Catalog["loadAgentsDir.ts<br/>AgentDefinition 目录"]
+  Entry["AgentTool / agentToolUtils<br/>启动入口与工具裁剪"]
+  Runner["runAgent / remote / in-process runner<br/>真实执行"]
+  TaskView["Task.ts / tasks.ts / AppState.tasks<br/>运行态投影"]
+  Coordinator["coordinatorMode.ts<br/>主控与综合"]
+
+  Catalog --> Entry
+  Entry --> Runner
+  Runner --> TaskView
+  TaskView --> Coordinator
+  Coordinator --> Entry
+```
+
+这张图强调多代理执行面统一的不是 agent 文件本身，而是 agent 定义、执行入口、任务投影和主控层四个层次。
+
+### 1.2 数据流视图
+
+```mermaid
+sequenceDiagram
+  participant Leader as 主线程 / coordinator
+  participant Entry as AgentTool
+  participant Catalog as loadAgentsDir.ts
+  participant Tasks as tasks/
+  participant Runner as runAgent / remote / in-process
+
+  Leader->>Entry: 发起 worker 请求
+  Entry->>Catalog: 解析 agent 定义
+  Entry->>Entry: 裁剪工具面与执行形态
+  Entry->>Tasks: 创建 Local / Remote / Teammate task
+  Tasks->>Runner: 启动真实执行
+  Runner-->>Tasks: 回写 progress / output / notifications
+  Tasks-->>Leader: 通过 AppState / mailbox 暴露运行态
+  Leader->>Leader: 综合结果并回复用户
+```
+
+这条数据流说明一次多代理请求如何从主线程决策进入 worker 执行，再以任务状态和结果回流到主线程。
+
 ## 2. 一句话结论
 
 Claude Code 的多代理执行面不是单个“agent manager”，而是五层协作：

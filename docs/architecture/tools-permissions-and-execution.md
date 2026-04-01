@@ -8,6 +8,53 @@
 - `utils/permissions/` 与 `hooks/useCanUseTool.tsx` 决定工具是否可以执行。
 - `services/tools/` 负责真正的执行编排。
 
+### 1.1 Overview 视图
+
+```mermaid
+flowchart TD
+  Registry["Tool.ts + tools.ts<br/>契约与工具池"]
+  Permission["permissions.ts + useCanUseTool<br/>规则、模式、交互适配"]
+  Execution["services/tools<br/>单次执行、批次调度、流式执行"]
+  Hooks["toolHooks<br/>Pre/Post hook 生命周期"]
+  ToolImpl["tools/ 与 MCP tools<br/>具体能力实现"]
+
+  Registry --> Permission
+  Permission --> Execution
+  Hooks --> Execution
+  Execution --> ToolImpl
+```
+
+这张图强调工具主线的三段式分工：注册层决定能看见什么，权限层决定能不能执行，执行层决定允许后的实际运行方式。
+
+### 1.2 数据流视图
+
+```mermaid
+sequenceDiagram
+  participant Q as query.ts
+  participant Pool as tools.ts
+  participant Perm as permissions.ts / useCanUseTool
+  participant Exec as services/tools
+  participant Tool as 具体工具实现
+
+  Q->>Pool: 获取当前工具池
+  Q->>Exec: 提交 tool_use
+  Exec->>Perm: 请求权限决策
+  alt allow
+    Perm-->>Exec: allow
+    Exec->>Tool: 调用 tool.call(...)
+    Tool-->>Exec: tool_result / contextModifier
+  else ask
+    Perm-->>Exec: ask
+    Exec->>Perm: 走 UI / bridge / worker 交互路径
+    Perm-->>Exec: 最终 allow 或 deny
+  else deny
+    Perm-->>Exec: deny
+  end
+  Exec-->>Q: progress / tool_result / telemetry
+```
+
+这条数据流说明一次工具调用不是直接落到 `tool.call(...)`，而是必须经过工具池、权限系统和执行编排三层串接。
+
 ## 2. 一句话结论
 
 这一套设计不是“工具列表 + 权限判断”的简单组合，而是三段式流水线：
