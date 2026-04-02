@@ -105,6 +105,39 @@ Agent 定义层
 - `tasks` 再定义“这些 worker 在运行时如何被追踪、停止、恢复和展示”。
 - `coordinator` 则定义“主线程如何使用这些 worker”。
 
+### 3.1 先用一个类比把多代理执行面看清楚
+
+如果把 Claude Code 的多代理系统想成一个大型施工现场，这几层可以这样理解：
+
+- `loadAgentsDir.ts` 像施工单位名录。它先列出现场有哪些工种和分包队伍，每支队伍具备什么能力、受什么限制、需要什么外部设备。
+- `AgentTool`、`agentToolUtils.ts`、`runAgent.ts` 像派工中心。它决定这次到底叫哪一队上场、给它配哪些工具、是在本地干、远端干，还是作为常驻驻场成员继续协作。
+- `Task.ts`、`tasks.ts`、`tasks/` 像施工看板。它不决定谁有资格接单，而是负责显示“谁正在干活、干到哪了、停了没、产出在哪”。
+- `coordinatorMode.ts` 像总包经理。它自己不一定亲自拧螺丝，但负责拆任务、调度队伍、汇总结果，然后对外给出最终交付。
+
+这个类比最重要的一点是：
+
+- `agents` 不是正在工作的工人，而是“可派遣工种目录”。
+- `tasks` 不是能力定义，而是“已经派出去之后的运行看板”。
+- `coordinator` 也不是另一种 worker，而是“调度和综合这一层控制面”。
+
+### 3.2 再看一个真实执行场景
+
+假设用户说：“先查清楚为什么测试挂了，再修复它，并告诉我是否还影响发布。”
+
+这时一条典型多代理链路会像这样展开：
+
+1. 启动阶段先由 `loadAgentsDir.ts` 把当前可用的 built-in、plugin、user、project agents 汇总成 agent catalog。
+2. 如果当前会话处于 coordinator mode，主线程先被改造成调度者，只保留适合拆任务、收结果的工具面。
+3. 主线程通过 `AgentTool` 派出一个 research worker 去定位失败测试，再派一个 verification worker 准备复现和验证。
+4. `agentToolUtils.ts` 会根据 agent 定义、是否异步、permission mode、是否 teammate 场景，把每个 worker 真正能看到的工具面裁剪出来。
+5. 系统把这些运行实例投影成 `LocalAgentTask`、`RemoteAgentTask` 或 `InProcessTeammateTask`，于是 UI 和状态层都能看到它们正在运行。
+6. 真正的执行分别由 `runAgent.ts`、远端 poller，或 `inProcessRunner.ts` 驱动；结果、进度和通知再回流到 `AppState.tasks`。
+7. 最后 coordinator 读取这些 task-notification 和任务状态，自己做综合判断，再把最终结论回复给用户。
+
+这条链路压缩成一句话就是：
+
+> 多代理执行不是“直接多开几个 prompt”，而是先选 worker 类型，再裁剪能力面，再投影成可追踪任务，最后由 coordinator 做统一调度和综合。
+
 ## 4. 模块职责对照表
 
 | 层 | 关键模块 | 主要职责 |
@@ -154,6 +187,18 @@ Agent 定义层
 
 这也是为什么多代理系统必须再有独立的 `tasks/` 层。
 
+### 5.4 源码里的最小例子
+
+`src/tools/AgentTool/loadAgentsDir.ts` 里最典型的最小样本有两个：
+
+- `BaseAgentDefinition`：把 `tools`、`skills`、`mcpServers`、`permissionMode`、`background`、`isolation`、`memory` 这些静态能力集中到一份契约上。
+- `getActiveAgentsFromList(...)`：把 built-in、plugin、user、project、flag、policy 这些来源合并，再按覆盖顺序选出最终生效版本。
+
+这两个例子合在一起，很清楚地说明了定义层的本质：
+
+- 它关心的是“有哪些 agent、各自带什么静态约束”。
+- 它并不关心“这个 agent 现在跑到第几步”。
+
 ## 6. `AgentTool` 与 `runAgent.ts` 是执行内核
 
 ### 6.1 `AgentTool` 是多代理能力的外部入口
@@ -201,6 +246,20 @@ Agent 定义层
 - query source、abort、metadata、transcript 等运行时信息。
 
 所以 `runAgent.ts` 的角色不是“管理 task”，而是“执行 agent 本体”。
+
+### 6.4 源码里的最小例子
+
+这一层最典型的最小样本有三个：
+
+- `src/tools/AgentTool/AgentTool.tsx`：真正接收模型发起的 agent 启动请求，并区分同步、后台、远端、teammate 等不同执行路径。
+- `src/tools/AgentTool/agentToolUtils.ts` 里的 `resolveAgentTools(...)`：把 agent frontmatter 里的工具声明收敛成真实可执行工具池，并顺带解析 `allowedAgentTypes` 这类元信息。
+- `src/tools/AgentTool/runAgent.ts` 里的 `initializeAgentMcpServers(...)` 和 `runAgent(...)`：前者把 agent-specific MCP servers 接进来，后者把静态定义真正拉进 query loop。
+
+这几个样本很能说明执行入口层的边界：
+
+- 它不是静态目录。
+- 它也不是 UI 看板。
+- 它负责把“一个定义”真正转成“一次运行”。
 
 ## 7. `Task.ts`、`tasks.ts` 与 `tasks/` 负责运行态投影
 
@@ -261,6 +320,20 @@ Agent 定义层
 
 这说明 in-process teammate 不是“agent 的另一种 UI 展示”，而是独立的运行形态。
 
+### 7.6 源码里的最小例子
+
+这一层最典型的最小样本有四个：
+
+- `src/Task.ts` 里的 `generateTaskId(...)` 和 `createTaskStateBase(...)`：说明所有 task 先共享统一 task id、状态、输出文件、通知语义。
+- `src/tasks.ts` 里的 `getAllTasks()`：说明任务系统本质上是“按 `TaskType` 聚合实现”的统一注册表。
+- `src/tasks/LocalAgentTask/LocalAgentTask.tsx` 里的 `registerAsyncAgent(...)` 与 `completeAgentTask(...)`：把本地 worker 的创建、进度和完成状态投影进任务框架。
+- `src/tasks/RemoteAgentTask/RemoteAgentTask.tsx` 里的 `registerRemoteAgentTask(...)`：把远端 session 包装成统一 task，并接上 poll/reconnect/restore 语义。
+
+这个最小例子组合能直接看出：
+
+- task 层并不定义 worker 的能力。
+- 它负责把已经跑起来的 worker 统一成可追踪、可恢复、可停止的运行态对象。
+
 ## 8. `coordinatorMode.ts` 把主线程变成控制面
 
 ### 8.1 coordinator mode 改变的是主线程职责
@@ -301,6 +374,16 @@ Agent 定义层
 - coordinator 不再被设计成“自己做完所有事”。
 - 它被设计成“掌控 worker 并整合结果”。
 
+### 8.4 源码里的最小例子
+
+`src/coordinator/coordinatorMode.ts` 里最典型的最小样本有三个：
+
+- `isCoordinatorMode()`：说明 coordinator 首先是一次运行模式切换，而不是新 agent 类型。
+- `getCoordinatorUserContext(...)`：把 worker 可见工具面、MCP server 能力和 scratchpad 信息明确注入给主线程。
+- `getCoordinatorSystemPrompt()`：直接把“研究并发、综合留在主线程、实现优先下沉给 worker”写成 coordinator 的系统工作流。
+
+这三个函数合在一起，把 coordinator 的边界说得非常明确：它不是普通 worker 的变体，而是主线程的一套调度人格和工具边界。
+
 ## 9. 同进程 teammate 路径为什么是独立执行面
 
 ### 9.1 `spawnInProcess.ts` 负责把 teammate 注册成共享进程中的一个任务
@@ -334,6 +417,16 @@ Agent 定义层
 - teammate mailbox、idle notification、shutdown request 等协作信号。
 
 这意味着 in-process teammate 不只是“更快的 subagent”，而是一种能与主线程持续协作的 worker 形态。
+
+### 9.4 源码里的最小例子
+
+这一层最典型的最小样本有三个：
+
+- `src/utils/swarm/spawnInProcess.ts` 里的 `spawnInProcessTeammate(...)`：创建 `agentId`、`taskId`、`AbortController`、`TeammateContext`，再把它注册进 `AppState.tasks`。
+- `src/utils/swarm/inProcessRunner.ts` 里的 `runWithTeammateContext(...)` 和 `runWithAgentContext(...)`：说明同进程 teammate 共享进程，但不共享身份上下文。
+- `src/utils/swarm/inProcessRunner.ts` 里的 `startInProcessTeammate(...)`：说明 teammate 真正起跑后，仍然复用标准 `runAgent(...)` 主线，只是外围套了 teammate-specific 身份、邮箱和等待逻辑。
+
+这个最小例子组合说明，同进程 teammate 不是为了 UI 做出来的捷径，而是把“共享进程 + 独立身份 + 持续协作”正式落进运行时的一套执行面。
 
 ## 10. 一次多代理执行的实际流向
 

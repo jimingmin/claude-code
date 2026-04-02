@@ -91,6 +91,50 @@ Tool 契约与注册层
 - 权限层关心决策与交互。
 - 执行层关心顺序、并发、取消和结果回流。
 
+### 3.1 先用一个类比把三层关系看清楚
+
+如果把 Claude Code 的工具系统想成“带门禁的仓库作业系统”，这三层可以这样理解：
+
+- `Tool.ts` / `tools.ts` 像仓库里的货架目录和设备清单。它负责告诉调度系统：仓库里现在有哪些叉车、扫码枪、传送带、外包设备可用。
+- `permissions` / `useCanUseTool` 像门禁和审批系统。它不决定仓库里有没有这台设备，而是决定“这一次能不能把设备开出来用，是自动放行、要求审批，还是直接拒绝”。
+- `services/tools` 像现场调度与作业系统。当前一台设备被允许出库后，它负责安排谁先上、谁能并行、执行过程怎么回报进度、失败后如何收尾。
+
+这个类比最重要的点是把三件事拆开：
+
+- “系统里有哪些工具”是一层。
+- “这次是否允许使用”是一层。
+- “允许后怎么实际执行”又是一层。
+
+很多混淆都来自把这三件事压成一句“调用工具”。但在代码里，它们是明确分开的。
+
+### 3.2 再看一个真实执行场景
+
+假设模型在一次代码修复过程中先发出 `Read`，随后发出 `Bash`，想查看文件并运行测试。
+
+这时真实链路大致是这样的：
+
+1. `query.ts` 先收到 assistant 产出的 `tool_use`。
+  这时它还不会直接调用 `tool.call(...)`，而是把工具调用交给 `services/tools` 这一层。
+
+2. 执行层先在工具池里定位工具定义。
+  也就是先确认当前运行时里有没有这个工具，以及它的 schema、并发语义、只读属性、权限要求是什么。
+
+3. 然后进入权限决策。
+  `hasPermissionsToUseTool(...)` 会先做规则匹配和工具自身权限检查；如果结果是 `ask`，再由 `useCanUseTool` 把这个 ask 接到交互式弹窗、bridge、worker 或 headless 自动拒绝路径上。
+
+4. 如果权限被允许，执行层才会真正调用工具。
+  `toolExecution.ts` 会做输入校验、pre-tool hooks、permission resolve、真正的 `tool.call(...)`，并把结果包装回统一消息格式。
+
+5. 如果工具在流式阶段就被模型连续产出，`StreamingToolExecutor` 还会提前开跑。
+  它会尽量让并发安全的工具先执行，同时保证结果最终按工具出现顺序回放，不打乱对话语义。
+
+6. 工具结果最后回到 `query.ts` 主循环。
+  也就是说，工具系统的职责不是自己终结会话，而是把工具结果规范地送回单轮执行内核，供模型继续下一步推理。
+
+这个例子可以压缩成一句话：
+
+> `tools.ts` 决定“仓库里有什么”，`permissions` 决定“这次让不让拿”，`services/tools` 决定“拿出来之后怎么干活”。
+
 ## 4. Tool.ts 与 tools.ts 的责任
 
 ### 4.1 Tool.ts 是统一契约层
@@ -119,6 +163,21 @@ Tool 契约与注册层
 
 - 工具池控制能力面大小和 prompt 体积。
 - 权限检查控制每次调用的实际执行权。
+
+### 4.3 源码里的最小例子
+
+`src/Tool.ts` 里最典型的最小样本是 `ToolUseContext` 和 `ToolPermissionContext`。
+
+从这两个类型就能直接看出，工具契约层关心的是：
+
+- 当前有哪些 `commands`、`tools`、`mcpClients`
+- 当前消息数组 `messages`
+- `getAppState` / `setAppState`
+- abort、进度、文件状态、权限上下文
+
+这说明工具在系统里不是一个裸函数，而是一个需要完整运行时上下文的可执行单元。
+
+`src/tools.ts` 的最小样本则是“把 built-in tools 与运行时可见工具合并/过滤”的那条装配主线。这个例子说明 `tools.ts` 的职责是生成当前工具池，而不是代替权限系统拍板。
 
 ## 5. 权限体系的责任分层
 
@@ -165,6 +224,17 @@ Tool 契约与注册层
 - `hasPermissionsToUseTool(...)` 在此基础上再叠加 `dontAsk`、`auto`、headless agent hook 优先等运行时模式逻辑。
 
 因此，权限体系不是单个函数拍板，而是“基础许可判断 + 运行环境修正”的双层结构。
+
+### 5.4 源码里的最小例子
+
+`src/utils/permissions/permissions.ts` 里的 `hasPermissionsToUseTool(...)` 是权限层最好的最小样本。
+
+这段代码非常清楚地体现了两层结构：
+
+- 先拿到 `hasPermissionsToUseToolInner(...)` 的基础结果。
+- 如果结果是 `ask`，再根据 `dontAsk`、`auto`、headless agent、classifier 等运行时模式继续变换。
+
+这个最小例子很重要，因为它说明权限系统不是“看到工具名就直接 allow/deny”的简单开关，而是一条分阶段收敛的决策链。
 
 ## 6. 权限判定顺序
 
@@ -224,6 +294,12 @@ Tool 契约与注册层
 
 因此，`useCanUseTool` 的价值不是“再做一次权限判断”，而是把统一权限结果接到不同执行环境中。
 
+### 7.1 源码里的最小例子
+
+`useCanUseTool` 这一层最好的理解方式，不是把它看成新的规则引擎，而是看成“ask 结果的适配器”。
+
+它对应的最小源码证据，是整个系统里 `CanUseToolFn` 被下游执行层当成统一回调来调用，而真正的 ask 分流则留在 hook/UI/bridge 这条链路里。这说明它的本质是把权限内核结果接到交互环境，而不是改写权限语义本身。
+
 ## 8. services/tools 的责任
 
 执行层可以再拆成三个子角色。
@@ -276,6 +352,24 @@ Tool 契约与注册层
 - 处理“并发安全工具可并行、非安全工具独占”的运行时约束。
 
 它可以理解为 `toolOrchestration` 的流式优化版本。
+
+### 8.5 源码里的最小例子
+
+`src/services/tools/toolExecution.ts` 里的 `checkPermissionsAndCallTool(...)` 是执行层最典型的最小样本。
+
+从这段代码可以直接看到完整的单次执行闭环：
+
+- 先做 schema 校验和输入校验。
+- 再跑 pre-tool hooks。
+- 再解析最终 permission decision。
+- 只有在 `allow` 后才真正进入 `tool.call(...)`。
+- 最终把结果包装成统一消息返回。
+
+这说明执行层不是“直接调用工具”，而是在权限、hooks、telemetry、错误处理都完成之后，才执行真正动作。
+
+另一个非常有代表性的最小样本是 `src/services/tools/StreamingToolExecutor.ts` 里的 `StreamingToolExecutor` 类。
+
+它维护一组 `queued` / `executing` / `completed` 工具，按 `isConcurrencySafe` 决定是否并发执行，并在流式阶段提前开始工作、但仍保证结果按出现顺序回放。这个样本最能说明执行层的独立价值：同样是“执行工具”，批量收尾和流式执行是两种不同调度问题。
 
 ## 9. 三层协作的主链路
 

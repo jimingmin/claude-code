@@ -101,6 +101,53 @@ sequenceDiagram
 
 这个项目明显采用的是“全局内核态 + 会话响应态 + 专用子系统状态”三段式结构。
 
+### 3.1 先用一个类比把五层状态放进同一画面
+
+如果把 Claude Code 想成一座城市，这五层状态可以这样理解：
+
+- `bootstrap/state.ts` 像市政府的户籍与行政底册。它记录这座城市当前是谁、在哪、属于哪个辖区，提供稳定身份和全局坐标。
+- `state/` 像城市运行指挥中心的大屏。它显示这座城市此刻正在发生什么，哪些任务在跑、哪些权限模式在生效、哪些远端连接或通知需要被用户实时看到。
+- `history.ts` 像市民服务大厅的办事记录簿。它专门保存“用户之前输入过什么”，方便以后回放和检索，但它不是整座城市的全部运行日志。
+- `tasks/` 像各类正在执行的工单系统。每张工单有自己的状态、生命周期、输出文件和终止条件。
+- `SessionMemory` 像市政府给当前城市运行写的阶段性简报。它不记录全部原始事件，而是持续提炼“到目前为止最重要、最该保留的摘要”。
+
+这个类比最想说明的是：这些状态都和“系统在运行”有关，但它们处理的不是同一种问题。
+
+- 有的状态负责稳定身份。
+- 有的状态负责实时可见运行态。
+- 有的状态负责恢复输入。
+- 有的状态负责后台任务生命周期。
+- 有的状态负责当前会话摘要。
+
+### 3.2 再看一个真实会话场景
+
+假设用户启动 `claude`，在一个项目里连续做了三件事：
+
+- 先输入一条请求，让系统分析当前改动。
+- 然后触发一个后台任务。
+- 接着会话变长，系统开始做摘要维护。
+
+这时五层状态会同时但分工明确地发生变化：
+
+1. 启动阶段先由 `bootstrap/state.ts` 固定全局身份。
+      例如当前 `sessionId`、`projectRoot`、`cwd`、运行模式等会先被放进进程级状态。它定义的是“这次会话到底是谁、在哪个项目里”。
+
+2. 会话建立后，`state/` 创建 `AppState`。
+      这时 REPL 或 headless 会话开始拥有自己的响应式运行态，比如权限模式、通知、MCP 视图、任务视图、UI 选择状态等。它定义的是“当前会话此刻正在发生什么”。
+
+3. 当用户输入请求时，`history.ts` 记录输入历史。
+      它会把这次输入加进 `pendingEntries`，并异步 flush 到 `history.jsonl`。这一步的目的不是给模型提供上下文，而是为了之后可以用上箭头、搜索、恢复输入。
+
+4. 如果请求触发了后台 agent 或 shell，`tasks/` 负责任务生命周期。
+      任务类型由任务系统定义，但真正实时可见的任务状态会写进 `AppState.tasks`，这样 UI 才能看到某个任务是 `pending`、`running` 还是 `completed`。
+
+5. 如果会话变长，`SessionMemory` 会在后台提炼摘要。
+      它不会替代 transcript，也不会替代 history，而是根据阈值和 hook 触发，用 forked agent 更新当前会话的 memory 文件，为后续 compact 和继续对话提供更稳定的摘要信息。
+
+这个场景可以压缩成一句话：
+
+> `bootstrap/state.ts` 决定“我们是谁”，`AppState` 决定“现在发生什么”，`history.ts` 决定“用户说过什么”，`tasks/` 决定“后台在跑什么”，`SessionMemory` 决定“到目前为止该记住什么”。
+
 ## 4. 状态分工对照表
 
 | 状态层 | 主要拥有者 | 生命周期 | 典型写入口 | 典型读入口 | 主要职责 |
@@ -145,6 +192,18 @@ sequenceDiagram
 
 所以 `bootstrap/state.ts` 的首要价值是提供统一的运行时身份边界，而不是承载所有动态过程状态。
 
+### 5.4 源码里的最小例子
+
+`src/bootstrap/state.ts` 里 `switchSession(...)`、`getSessionId()`、`setProjectRoot(...)` 这组函数，就是这一层最典型的最小样本。
+
+它们共同体现出一个事实：这一层管理的是稳定身份边界，而不是响应式界面数据。
+
+- `switchSession(...)` 原子切换当前会话身份。
+- `setProjectRoot(...)` 固定项目身份边界。
+- 各种 getter 让基础设施模块在不依赖 UI store 的情况下拿到当前运行时上下文。
+
+这个最小例子很适合说明 `bootstrap/state.ts` 的本质是“进程级内核态”。
+
 ## 6. `state/` 的责任
 
 ### 6.1 `state/` 是会话级响应式运行态
@@ -182,6 +241,19 @@ sequenceDiagram
 
 因此，这一层是“响应式会话状态”，但真正的持久化和外部同步并不直接埋在 UI 组件里，而是集中在变更回调边界。
 
+### 6.4 源码里的最小例子
+
+`src/state/AppStateStore.ts` 里的 `AppState` 类型和 `getDefaultAppState()`，再加上 `src/state/store.ts` 的 `createStore(...)`，构成了这一层最典型的最小样本。
+
+从 `AppState` 可以直接看到这层状态关注的是：
+
+- `toolPermissionContext`
+- `tasks`
+- `mcp`
+- notifications、remote 状态、footer/UI 选择等
+
+而 `getDefaultAppState()` 和 `createStore(...)` 则说明它是一个会话级响应式 store，有明确初始值、显式更新和订阅机制。这正是“当前会话运行态”的典型特征。
+
 ## 7. `history.ts` 的责任
 
 ### 7.1 它保存的是输入历史，不是会话 transcript
@@ -218,6 +290,18 @@ sequenceDiagram
 - 与 transcript 区分：history 只记录用户输入恢复所需信息。
 - 与 SessionMemory 区分：history 不是摘要，也不会主动提炼知识。
 
+### 7.4 源码里的最小例子
+
+`src/history.ts` 里 `pendingEntries`、`currentFlushPromise` 和 `addToHistory(...)` 是这一层最典型的最小样本。
+
+这三个对象连起来，正好体现了 history 子系统的真实职责：
+
+- 先把输入放进待刷新的缓冲区 `pendingEntries`。
+- 通过 `currentFlushPromise` 和 flush 逻辑控制异步落盘。
+- 用 `addToHistory(...)` 作为统一写入口。
+
+这个最小例子很能说明 `history.ts` 不是 UI store，也不是 transcript，而是专门围绕“输入恢复与持久化”的子系统。
+
 ## 8. `tasks/` 的责任
 
 ### 8.1 任务系统是异步执行状态面
@@ -248,6 +332,17 @@ sequenceDiagram
 
 这类状态本质上属于“正在运行的过程”，与历史、会话摘要、项目身份都不是一类问题。
 
+### 8.4 源码里的最小例子
+
+`src/Task.ts` 里的 `TaskStatus`、`TaskContext`、`TaskStateBase`，再加上 `src/tasks.ts` 里的 `getAllTasks()`，就是任务系统最典型的最小样本。
+
+它们一起说明了两件事：
+
+- 任务系统先定义“什么叫任务、任务有哪些生命周期状态、任务和主会话如何交互”。
+- 再由 `getAllTasks()` 把具体任务类型注册进系统。
+
+这说明 `tasks/` 更像“后台执行实体的类型系统与生命周期边界”，而不是一个独立的万能状态仓库。
+
 ## 9. `SessionMemory` 的责任
 
 ### 9.1 它是当前会话的摘要型状态，不是通用状态仓库
@@ -273,6 +368,18 @@ sequenceDiagram
 - 它不是 `history.ts`，因为它不追求原样回放输入。
 - 它不是 transcript，因为它不保存完整消息序列。
 - 它也不是 `memdir/` 的长期记忆注入体系，因为它面向当前会话的持续摘要。
+
+### 9.4 源码里的最小例子
+
+`src/services/SessionMemory/sessionMemory.ts` 里的 `initSessionMemory()` 与 `shouldExtractMemory(...)` 一起构成了这一层最典型的最小样本。
+
+从这段代码可以直接看到：
+
+- SessionMemory 不是用户每次输入时手工更新的。
+- 它会基于 token 阈值、tool call 数量和 hook 时机来决定是否抽取摘要。
+- 真正的摘要更新是在后台进行的，并且会读写当前会话的 memory 文件。
+
+这个例子很能说明 `SessionMemory` 的本质是“会话后台摘要服务”，而不是普通的 store 字段。
 
 ## 10. 五层之间如何协作
 

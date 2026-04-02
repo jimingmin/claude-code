@@ -97,6 +97,47 @@ QueryEngine
 - 内核可以围绕“单轮查询”保持集中，不掺入太多 UI/SDK/持久化职责。
 - 会话层可以在不改动单轮循环的前提下，对接 headless、SDK、远程、恢复、日志持久化等外层需求。
 
+### 3.1 先用一个类比把两层关系看清楚
+
+如果把一次对话想成“电视剧拍摄”，`QueryEngine` 和 `query` 的关系可以这样理解：
+
+- `QueryEngine` 像整部剧的制片与场记系统。它知道前面拍过什么、预算用了多少、素材存在哪、这一场拍完后要不要归档、怎么把结果交付给平台。
+- `query` 像当前这一场戏的导演。它拿到这一场的剧本和现场资源后，决定这一镜怎么拍、什么时候调用道具、拍崩了是否要重来、是否需要补拍下一镜。
+- `Tool` 像片场里真正被调用的灯光、道具、摄影机、外援团队。导演会调度它们，但制片系统不会在镜头里直接指挥每一次打光。
+
+这个类比最重要的地方在于区分“跨场次持续存在的东西”和“只属于当前这一场的东西”：
+
+- 跨多轮持续存在的，更接近 `QueryEngine`。
+- 只在当前轮次成立的，更接近 `query`。
+
+### 3.2 再看一个真实执行场景
+
+假设用户在当前会话里发出一句话：请帮我审查最近改动，并指出风险。
+
+这时系统大致会这样走：
+
+1. 输入先进入 `QueryEngine.submitMessage(...)`。
+  这一步不是简单地“把 prompt 发给模型”，而是把这条新输入接到已有会话上。`QueryEngine` 会先读取当前已有消息、usage、文件状态、权限拒绝记录等会话级状态。
+
+2. `QueryEngine` 预处理输入。
+  它会调用 `processUserInput(...)`，处理 slash command、附件、可能的 prompt 改写、模型覆盖等逻辑，然后把这次用户输入真正写进 `mutableMessages`。
+
+3. `QueryEngine` 构造本轮上下文并调用 `query(...)`。
+  到这一步，它把当前消息快照、可用 tools、mcpClients、权限上下文、AppState 接口等装进 `ToolUseContext`，然后把“这一轮需要的全部材料”交给单轮内核。
+
+4. `query(...)` 开始跑这一轮。
+  它会消费模型流式输出，判断有没有 `tool_use`，如果需要就调用 `runTools(...)` 或 `StreamingToolExecutor`，然后再把工具结果接回消息流，决定是否继续 follow-up、是否 compact、是否因为 token/budget 等原因调整策略。
+
+5. `query(...)` 把这一轮产出的消息和终止原因吐回给 `QueryEngine`。
+  注意它只回答“这一轮为什么结束”，不回答“整个会话最后怎么存、怎么对外展示”。
+
+6. `QueryEngine` 再把结果写回会话和外部世界。
+  它会更新 `mutableMessages`、usage、transcript、compact boundary，并把消息转成 SDK/CLI 能理解的输出格式。
+
+这个场景可以压缩成一句话：
+
+> `QueryEngine` 负责把“这段对话到目前为止是什么状态”管理好，`query` 负责把“这一轮接下来怎么跑完”执行好。
+
 ## 4. QueryEngine 的责任
 
 `QueryEngine` 的角色更接近“每个会话一个实例的运行时控制器”。它主要负责以下几类事情。
@@ -161,6 +202,28 @@ QueryEngine
 - permission denial 报告。
 
 所以 `QueryEngine` 更像“会话 API 外壳”，而不是“对话算法本身”。
+
+### 4.6 源码里的最小例子
+
+`src/QueryEngine.ts` 里最能代表 `QueryEngine` 本质的最小样本有两段。
+
+第一段是类上的长期字段：
+
+- `mutableMessages`
+- `readFileState`
+- `permissionDenials`
+- `totalUsage`
+
+这直接说明 `QueryEngine` 是跨多轮持有状态的对象，而不是一次性函数。
+
+第二段是 `submitMessage(...)` 的主线：
+
+- 先调用 `processUserInput(...)`
+- 再把新消息 push 到 `mutableMessages`
+- 然后调用 `query(...)`
+- 最后把 yield 回来的结果继续写回 `mutableMessages` 和 transcript
+
+这段流程非常适合作为最小例子，因为它完整体现了 `QueryEngine` 的角色：接入新输入、维护会话主存、把本轮委托给内核，再把结果收回来。
 
 ## 5. query 的责任
 
@@ -228,6 +291,19 @@ QueryEngine
 - 触发 token budget 收口。
 
 这个边界很重要：`query` 只报告本轮终态，如何把终态变成最终 SDK/CLI 行为，是 `QueryEngine` 的事。
+
+### 5.6 源码里的最小例子
+
+`src/query.ts` 里最典型的最小样本是 `query(...)` 和内部的 `queryLoop(...)`。
+
+从这段代码可以直接看到几件事：
+
+- 它以 `state` 形式维护当前轮次局部状态，而不是长期会话状态。
+- 它会在每轮里重建 `messagesForQuery`，并按顺序处理 snip、microcompact、context collapse、autocompact。
+- 它会在发现 `tool_use` 后接入 `StreamingToolExecutor` 或工具执行编排。
+- 它最终返回的是一个 `Terminal` 终止语义，而不是整个会话对象。
+
+这个例子非常能说明 `query` 的本质：它不是“保存对话历史的人”，而是“把这一轮模型-工具-继续执行闭环跑完的人”。
 
 ## 6. 两者的交接边界
 

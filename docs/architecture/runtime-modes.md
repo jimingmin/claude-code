@@ -71,6 +71,35 @@ flowchart TD
 - `bridge` 复用的是本地 agent 内核，只是把控制面移到外部。
 - `remote`、`server` 复用的是本地 UI 和控制逻辑，但 agent 内核在远端。
 
+### 3.1 先用一个类比把几种运行模式看清楚
+
+如果把 Claude Code 想成一套“控制室和机房分离”的系统，这几种模式可以这样理解：
+
+- 本地模式：你本人坐在本地控制室里，直接操作本机机房里的设备。UI 和执行都在本地。
+- `bridge`：远端控制室接管了你这边的本地机房。控制在远端，但真正干活的机器仍在你本地。
+- `remote`：你还坐在本地控制室里，但实际操作的已经是远端机房。你的终端主要负责显示状态、转发输入和处理权限反馈。
+- `server` / direct-connect：和 `remote` 同样是“本地控制远端机房”，但接的不是项目自己的远端会话体系，而是一台更通用的会话服务端。
+
+这个类比里最重要的是两条轴：
+
+- 控制面在哪里。
+- agent 回路和工具执行在哪里。
+
+一旦这两条轴分清，`bridge` 和 `remote/server` 的区别就不会再混淆。
+
+### 3.2 再看一个真实启动场景
+
+假设同一个用户都在本地终端输入 Claude Code，但目标完全不同：
+
+1. 如果只是普通本地开发，`main.tsx` 会直接把本地 REPL 接到本地 `QueryEngine` 和本地 tools。
+2. 如果用户使用 `claude assistant` 或 `--remote`，`main.tsx` 会先构造 `RemoteSessionConfig`，再把本地 TUI 接到远端 session 上；这时本地终端主要扮演远端会话客户端。
+3. 如果用户使用 `claude connect <url>`，`main.tsx` 会先调用 `createDirectConnectSession(...)` 去远端服务端创建 session，再把 REPL 或 headless runner 接到 `DirectConnectSessionManager`。
+4. 如果用户使用 `remote-control`，则不会把本地终端接到远端 agent 上，而是进入 `bridgeMain(...)`，把本地环境注册成一个可被外部控制面调度的执行环境。
+
+这条场景最能说明一个本质区别：
+
+> `bridge` 是把本地执行环境输出给远端控制面；`remote` 和 `server` 是把远端执行结果接回本地终端。
+
 ## 4. bridge 的职责
 
 ### 4.1 bridge 是本地环境的对外暴露层
@@ -106,6 +135,16 @@ flowchart TD
 所以 bridge 不是“远端运行 Claude Code”，而是“远端控制本地 Claude Code 环境”。
 
 补充一点：`main.tsx` 里的 `remote-control` 命令注册主要用于帮助信息，真正的 bridge 进入路径是更早的 fast-path，最后才委托到 `bridgeMain(...)`。这也说明 bridge 更像独立运行模式，而不是普通 commander 子命令。
+
+### 4.4 源码里的最小例子
+
+这一层最典型的最小样本有三个：
+
+- `src/bridge/bridgeMain.ts` 里的 `runBridgeLoop(...)`：能直接看出 bridge 的重心是环境注册、poll、heartbeat、session 管理，而不是单轮 query。
+- `src/bridge/sessionRunner.ts` 里的 `createSessionSpawner(...)`：把真正的 Claude Code 会话放进子进程里跑，并把 activity、permission request、结果这些信号回送给 bridge 层。
+- `src/main.tsx` 里动态导入 `bridgeMain(...)` 的 remote-control 入口：说明 bridge 在启动路径上是一个独立模式，而不是普通命令实现细节。
+
+这几个例子一起说明，bridge 本质上是“本地执行环境的对外导出层”。
 
 ## 5. remote 的职责
 
@@ -144,6 +183,16 @@ flowchart TD
 - `--remote` 这类先创建远端 session，再用本地 TUI 接入的模式。
 
 因此，remote 不是单一命令，而是一组“本地 UI 接远端 session”的入口族。
+
+### 5.5 源码里的最小例子
+
+这一层最典型的最小样本有三个：
+
+- `src/remote/RemoteSessionManager.ts` 里的 `connect()`：建立 WebSocket 订阅并接收远端 SDK 消息。
+- 同一个文件里的 `sendMessage(...)` 和 `respondToPermissionRequest(...)`：分别对应“把本地输入发到远端”和“把本地权限决定回传给远端”。
+- `src/main.tsx` 里 `createRemoteSessionConfig(...)` 加 `launchRepl(... remoteSessionConfig)` 的分支：说明 remote 模式的本质是给本地 REPL 接一个远端后端。
+
+这个最小例子组合能直接看出：remote 模式下，本地终端不再拥有 agent 回路，它只是远端 session 的客户端外壳。
 
 ## 6. server / direct-connect 的职责
 
@@ -189,6 +238,16 @@ flowchart TD
 - headless 模式下，`open <cc-url> -p` 这类入口同样先创建 direct-connect session，再把消息流接到专门的 headless runner。
 
 所以 `server/` 并不是只服务 REPL，它提供的是一套更通用的远端会话连接能力。
+
+### 6.5 源码里的最小例子
+
+这一层最典型的最小样本有三个：
+
+- `src/server/createDirectConnectSession.ts` 里的 `createDirectConnectSession(...)`：直接向 `${serverUrl}/sessions` 发请求，拿回 `sessionId` 和 `wsUrl`。
+- `src/server/directConnectManager.ts` 里的 `DirectConnectSessionManager`：维护 WebSocket、转发用户消息、处理 permission request/response 和 interrupt。
+- `src/main.tsx` 里 `createDirectConnectSession(...)` 之后再 `launchRepl(...)` 或进入 headless connect runner 的分支：说明 direct-connect 是一套既能喂给 TUI，也能喂给 headless 的通用远端连接层。
+
+这个最小例子组合说明，`server` 不是 bridge 的别名，而是一种“本地 CLI 连接远端会话服务端”的标准客户端模式。
 
 ## 7. 三者关系
 

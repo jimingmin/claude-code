@@ -85,6 +85,46 @@ Claude Code 的启动并不是单一入口函数直接拉起会话，而是四�
 - 纵向维度是“把一次进程启动逐步收敛成可运行会话”。
 - 横向维度是“把不同运行模式接到同一套能力装配结果上”。
 
+### 3.1 先用一个类比把启动链路看成“机场安检到登机”
+
+如果把 Claude Code 的启动过程类比成一次机场登机流程，可以这样理解：
+
+- `init` 像机场在你到达柜台前就必须完成的基础设施检查。安检系统、跑道、广播、值机系统都要先处于可用状态，否则后面什么都谈不上。
+- `main` 像总值机柜台。它先确认你是谁、拿的是什么票、要走哪条通道，然后把你分发到合适的后续流程。
+- `setup` 像登机前对你这次行程做的现场确认。比如你到底从哪个登机口走、有没有转机、有没有特殊通道、行李是不是要切换到另一个航站楼。
+- `commands` 像机场里的航班面板和登机入口目录。它负责告诉你“有哪些入口可以走”，而不是负责开飞机。
+- `launchRepl`、remote、direct-connect、ssh 等模式，像最终把你送上不同航班或不同接驳通道。前面准备好的东西在这里才真正接到实际执行路径上。
+
+这个类比最想强调的是：启动装配不是一个动作，而是一串分工明确的关口。`init`、`main`、`setup`、`commands` 看起来都发生在“启动时”，但它们解决的根本不是同一个问题。
+
+### 3.2 再看一个真实启动场景
+
+假设用户在一个项目目录里直接运行 `claude`，没有指定特殊子命令，但开启了常规交互式会话。
+
+这时典型链路大致是这样的：
+
+1. 进程先进入 `main.tsx`。
+  这时它还没有真正开始会话，而是在解析 CLI 参数、stdin 状态、恢复参数、权限模式、远端模式等总控信息。
+
+2. `main.tsx` 调用 `init()`。
+  `init` 会先启用配置系统、应用安全环境变量、配置全局网络/mTLS、注册清理逻辑，并启动一些不依赖当前会话目录的后台准备工作。这一步的目标是先让“整个进程能安全运行”。
+
+3. `main.tsx` 接着准备一次具体启动的上下文。
+  它会根据 CLI 参数判断这次是普通 REPL、resume、remote、ssh，还是其它特殊入口；同时预先注册 bundled skills 和 built-in plugins，确保后面的命令加载不会拿到空结果。
+
+4. `main.tsx` 调用 `setup(...)`，并尽量和 `getCommands(...)` 并行。
+  `setup` 会固定 cwd、捕获 hooks 快照、初始化文件变化监听；如果启用了 worktree，还会切换仓库和工作目录。与此同时，`commands.ts` 会开始汇聚 built-in commands、skills、plugin skills 等用户入口。
+
+5. `setup` 结束后，`main.tsx` 再等待命令和 agents 一起就绪。
+  这时系统拿到的已经不只是“一个 cwd”，而是一整套本次会话真正能用的启动结果：最终工作目录、命令面、agent definitions，以及后续模式分发所需的环境。
+
+6. 最后 `main.tsx` 把结果交给具体运行模式。
+  如果是普通交互式会话，就进入 `launchRepl`；如果是 remote 或 direct-connect，就走对应路径。到这里，启动装配才真正结束，系统才从“准备阶段”进入“会话执行阶段”。
+
+这个场景可以压缩成一句话：
+
+> `main.tsx` 像总调度，`init` 先把机场通电，`setup` 确认这趟行程的现场环境，`commands` 摆出可走入口，最后运行模式把这些结果真正接到会话上。
+
 ## 4. 模块职责对照表
 
 | 模块 | 责任 | 不负责 |
@@ -119,6 +159,20 @@ Claude Code 的启动并不是单一入口函数直接拉起会话，而是四�
 - 把真正依赖会话或交互模式的逻辑留给 `main.tsx` 与后续分支。
 
 这说明 `init` 的设计目标不是“尽量多做”，而是“只做所有路径都需要、且适合在这一时机做的事”。
+
+### 5.3 源码里的最小例子
+
+`src/entrypoints/init.ts` 里的 `init()` 本身就是最好的最小例子。
+
+从这个函数可以直接看到，`init` 做的都是进程级准备动作，例如：
+
+- `applySafeConfigEnvironmentVariables()`
+- `setupGracefulShutdown()`
+- `configureGlobalMTLS()`
+- `configureGlobalAgents()`
+- `registerCleanup(...)`
+
+这些动作有一个共同点：它们不依赖某次具体会话的消息，也不关心用户最终会进入哪个运行模式。这个例子正好说明 `init` 的本质是“把整个进程的基础设施准备好”，而不是“开始一段对话”。
 
 ## 6. `main.tsx` 的责任
 
@@ -156,6 +210,18 @@ Claude Code 的启动并不是单一入口函数直接拉起会话，而是四�
 
 这说明运行模式不是 setup 的一部分，也不是命令注册表的一部分，而是 `main.tsx` 在所有前提准备完之后做出的最终分发决策。
 
+### 6.4 源码里的最小例子
+
+`src/main.tsx` 里有一段非常关键的启动代码：先调用 `initBuiltinPlugins()` 和 `initBundledSkills()`，然后并行启动 `setup(...)`、`getCommands(...)` 和 agent definitions 加载，最后再统一等待结果。
+
+这一小段代码最能说明 `main.tsx` 的角色：
+
+- 它不自己实现技能解析。
+- 它不自己实现 worktree 切换。
+- 它不自己持有会话消息。
+
+它做的是“把几个子系统在正确时机拉起来，并把结果接成一次完整启动”。这正是总装配器，而不是执行内核。
+
 ## 7. `setup.ts` 的责任
 
 ### 7.1 固定当前会话的物理运行环境
@@ -179,6 +245,17 @@ Claude Code 的启动并不是单一入口函数直接拉起会话，而是四�
 - 命令与插件相关的预取。
 
 因此 `setup.ts` 更接近“会话启动脚手架”，而不是仅仅一个目录切换助手。
+
+### 7.3 源码里的最小例子
+
+`src/setup.ts` 里最典型的一段是：先 `setCwd(cwd)`，然后 `captureHooksConfigSnapshot()`，再 `initializeFileChangedWatcher(cwd)`，必要时继续 `createWorktreeForSession(...)`，最后初始化 `SessionMemory` 和相关后台子系统。
+
+这段代码特别能说明 `setup` 和 `init` 的区别：
+
+- `init` 在准备整个进程。
+- `setup` 在准备“这一次会话到底站在哪个目录、使用哪套 hooks、是否切进 worktree、要启动哪些会话级后台能力”。
+
+所以 `setup` 的本质不是通用初始化，而是“把当前会话的物理运行环境落稳”。
 
 ## 8. `commands.ts` 的责任
 
@@ -206,6 +283,15 @@ Claude Code 的启动并不是单一入口函数直接拉起会话，而是四�
 - 决定进入 remote 还是 local 模式。
 
 这说明命令层的真正角色是入口组织，而不是能力执行或连接管理。
+
+### 8.3 源码里的最小例子
+
+`src/commands.ts` 里有两个特别典型的最小样本：
+
+- `COMMANDS = memoize(() => [...])`：汇总 built-in commands。
+- `getSkills(cwd)`：把 `getSkillDirCommands(cwd)`、`getPluginSkills()`、`getBundledSkills()`、built-in plugin skills 汇成技能入口视图。
+
+这两个样本很能说明 `commands.ts` 的本质。它不是执行某个命令，而是在做入口汇总：把来自内建、技能目录、插件、workflow 的能力整理成统一 `Command[]`，供上层模式选择和用户交互使用。
 
 ## 9. 关键交接边界
 
