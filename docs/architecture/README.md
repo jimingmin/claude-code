@@ -88,6 +88,13 @@ sequenceDiagram
 | [long-session-context.md](./long-session-context.md) | context、memdir、compact 如何控制长会话 | 解释稳定前缀、长期记忆、会话摘要和压缩重建。 |
 | [multi-agent-execution.md](./multi-agent-execution.md) | tasks、coordinator、agents 如何形成多代理执行面 | 解释 agent 定义、执行入口、任务投影和主控层。 |
 | [runtime-modes.md](./runtime-modes.md) | bridge、remote、server 如何分化运行模式 | 解释本地执行、远端执行和控制面分离的几种路径。 |
+| [built-in-prompts-quick-reference.md](./built-in-prompts-quick-reference.md) | 想先用一页图表理解 prompt 控制面分层、入口和场景 | 作为 prompt 体系的速查入口，帮助快速定位该去看哪条源码链路。 |
+| [built-in-prompts.md](./built-in-prompts.md) | `src/` 下真正进入模型的内置 prompt 在哪里、如何分层、分别服务什么场景 | 作为 prompt 控制面的参考清单，聚焦主会话 prompt、工具 prompt、后台 prompt 与内置命令 prompt。 |
+| [built-in-prompts-source-trace.md](./built-in-prompts-source-trace.md) | 内置 prompt 如何沿函数调用走到模型请求里 | 作为 prompt 控制面的源码追踪参考，回答定义点、装配点和发送点分别在哪。 |
+| [built-in-agents.md](./built-in-agents.md) | 当前仓库有哪些 built-in agents，以及它们的注册条件与 system prompt 原始模板 | 作为内置 agent 能力面的细化文档，单独梳理 agent，而不与 prompt 分层混写。 |
+| [built-in-skills.md](./built-in-skills.md) | 当前仓库有哪些 bundled skills，以及它们的 prompt 原文、装配逻辑与附带资源 | 作为内置 skill 能力面的细化文档，单独梳理 skill，而不与 prompt 分层混写。 |
+| [built-in-skills-missing-resource/README.md](./built-in-skills-missing-resource/README.md) | `claude-api`、`verify` 这类缺失 markdown 资源如何按原始路径逐文件复原 | 作为 built-in skills 的目录化补充入口，承载逐文件证据、复原内容和不可恢复边界。 |
+| [built-in-agents-and-skills.md](./built-in-agents-and-skills.md) | built-in agents、bundled skills 与缺失资源补充页的导航入口 | 给拆分后的 agent / skill 文档和缺失资源补充目录提供统一入口。 |
 
 ### 4.2 写作辅助
 
@@ -105,6 +112,13 @@ sequenceDiagram
 6. 然后读 [long-session-context.md](./long-session-context.md) 与 [multi-agent-execution.md](./multi-agent-execution.md)，补齐长会话与多代理两条重点横切主线。
 7. 最后读 [runtime-modes.md](./runtime-modes.md)，理解这些核心能力如何投射到 bridge、remote、server 等运行模式中。
 8. 如果要继续补专题，再读 [module-template.md](./module-template.md) 并按模板新建文档。
+9. 如果只想先快速定位 prompt 分层、入口和典型场景，先读 [built-in-prompts-quick-reference.md](./built-in-prompts-quick-reference.md)。
+10. 如果要盘点哪些字符串真正进入模型，再读 [built-in-prompts.md](./built-in-prompts.md)。
+11. 如果要追到函数级调用链，再读 [built-in-prompts-source-trace.md](./built-in-prompts-source-trace.md)。
+12. 如果要单独看 built-in agents 的原始细节，再读 [built-in-agents.md](./built-in-agents.md)。
+13. 如果要单独看 bundled skills 的原始细节，再读 [built-in-skills.md](./built-in-skills.md)。
+14. 如果还要看 `claude-api` / `verify` 这类缺失 markdown 资源的证据、逐文件复原内容和边界，再读 [built-in-skills-missing-resource/README.md](./built-in-skills-missing-resource/README.md)。
+15. 如果只想从一个入口跳转到 built-in agents、bundled skills 与缺失资源补充页，读 [built-in-agents-and-skills.md](./built-in-agents-and-skills.md)。
 
 ## 6. 非重点范围
 
@@ -112,7 +126,7 @@ sequenceDiagram
 
 - `buddy/` 及其衍生的 companion 表现层能力。
 - 纯展示型终端 UI、主题样式和动画细节。
-- 单个命令、单个工具、单个技能的具体 prompt 或算法实现。
+- 单个命令、单个工具、单个技能的算法实现细节；若只想看 prompt 分层、盘点、调用链，见 [built-in-prompts-quick-reference.md](./built-in-prompts-quick-reference.md)、[built-in-prompts.md](./built-in-prompts.md) 与 [built-in-prompts-source-trace.md](./built-in-prompts-source-trace.md)；若只想看内置 agent / skill 文档入口，见 [built-in-agents-and-skills.md](./built-in-agents-and-skills.md)。
 - 面向内部实验、演示或特定发布渠道的边缘功能开关。
 
 这些模块并非不重要，而是当前文档优先服务于理解系统骨架与主执行链路。
