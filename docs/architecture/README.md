@@ -88,6 +88,7 @@ sequenceDiagram
 | [long-session-context.md](./long-session-context.md) | context、memdir、compact 如何控制长会话 | 解释稳定前缀、长期记忆、会话摘要和压缩重建。 |
 | [multi-agent-execution.md](./multi-agent-execution.md) | tasks、coordinator、agents 如何形成多代理执行面 | 解释 agent 定义、执行入口、任务投影和主控层。 |
 | [runtime-modes.md](./runtime-modes.md) | bridge、remote、server 如何分化运行模式 | 解释本地执行、远端执行和控制面分离的几种路径。 |
+| [native-capability-gaps.md](./native-capability-gaps.md) | 相对于原生 Claude Code，这个仓库当前缺了哪些能力 | 区分 removed、stub、simplified 与 feature flag 固定关闭的能力边界。 |
 | [built-in-prompts-quick-reference.md](./built-in-prompts-quick-reference.md) | 想先用一页图表理解 prompt 控制面分层、入口和场景 | 作为 prompt 体系的速查入口，帮助快速定位该去看哪条源码链路。 |
 | [built-in-prompts.md](./built-in-prompts.md) | `src/` 下真正进入模型的内置 prompt 在哪里、如何分层、分别服务什么场景 | 作为 prompt 控制面的参考清单，聚焦主会话 prompt、工具 prompt、后台 prompt 与内置命令 prompt。 |
 | [built-in-prompts-source-trace.md](./built-in-prompts-source-trace.md) | 内置 prompt 如何沿函数调用走到模型请求里 | 作为 prompt 控制面的源码追踪参考，回答定义点、装配点和发送点分别在哪。 |
@@ -111,14 +112,15 @@ sequenceDiagram
 5. 再读 [capability-loading.md](./capability-loading.md) 与 [state-responsibilities.md](./state-responsibilities.md)，理解能力装载面和状态拥有者。
 6. 然后读 [long-session-context.md](./long-session-context.md) 与 [multi-agent-execution.md](./multi-agent-execution.md)，补齐长会话与多代理两条重点横切主线。
 7. 最后读 [runtime-modes.md](./runtime-modes.md)，理解这些核心能力如何投射到 bridge、remote、server 等运行模式中。
-8. 如果要继续补专题，再读 [module-template.md](./module-template.md) 并按模板新建文档。
-9. 如果只想先快速定位 prompt 分层、入口和典型场景，先读 [built-in-prompts-quick-reference.md](./built-in-prompts-quick-reference.md)。
-10. 如果要盘点哪些字符串真正进入模型，再读 [built-in-prompts.md](./built-in-prompts.md)。
-11. 如果要追到函数级调用链，再读 [built-in-prompts-source-trace.md](./built-in-prompts-source-trace.md)。
-12. 如果要单独看 built-in agents 的原始细节，再读 [built-in-agents.md](./built-in-agents.md)。
-13. 如果要单独看 bundled skills 的原始细节，再读 [built-in-skills.md](./built-in-skills.md)。
-14. 如果还要看 `claude-api` / `verify` 这类缺失 markdown 资源的证据、逐文件复原内容和边界，再读 [built-in-skills-missing-resource/README.md](./built-in-skills-missing-resource/README.md)。
-15. 如果只想从一个入口跳转到 built-in agents、bundled skills 与缺失资源补充页，读 [built-in-agents-and-skills.md](./built-in-agents-and-skills.md)。
+8. 如果想确认当前仓库与原生 Claude Code 的能力边界，再读 [native-capability-gaps.md](./native-capability-gaps.md)。
+9. 如果要继续补专题，再读 [module-template.md](./module-template.md) 并按模板新建文档。
+10. 如果只想先快速定位 prompt 分层、入口和典型场景，先读 [built-in-prompts-quick-reference.md](./built-in-prompts-quick-reference.md)。
+11. 如果要盘点哪些字符串真正进入模型，再读 [built-in-prompts.md](./built-in-prompts.md)。
+12. 如果要追到函数级调用链，再读 [built-in-prompts-source-trace.md](./built-in-prompts-source-trace.md)。
+13. 如果要单独看 built-in agents 的原始细节，再读 [built-in-agents.md](./built-in-agents.md)。
+14. 如果要单独看 bundled skills 的原始细节，再读 [built-in-skills.md](./built-in-skills.md)。
+15. 如果还要看 `claude-api` / `verify` 这类缺失 markdown 资源的证据、逐文件复原内容和边界，再读 [built-in-skills-missing-resource/README.md](./built-in-skills-missing-resource/README.md)。
+16. 如果只想从一个入口跳转到 built-in agents、bundled skills 与缺失资源补充页，读 [built-in-agents-and-skills.md](./built-in-agents-and-skills.md)。
 
 ## 6. 非重点范围
 

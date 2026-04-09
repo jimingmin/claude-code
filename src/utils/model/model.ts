@@ -28,10 +28,20 @@ import { LIGHTNING_BOLT } from '../../constants/figures.js'
 import { isModelAllowed } from './modelAllowlist.js'
 import { type ModelAlias, isModelAlias } from './aliases.js'
 import { capitalize } from '../stringUtils.js'
+import { normalizeThirdPartyModelSetting } from './thirdPartyModels.js'
 
 export type ModelShortName = string
 export type ModelName = string
 export type ModelSetting = ModelName | ModelAlias | null
+
+function normalizeKnownThirdPartyModelSetting(
+  modelSetting: ModelSetting | undefined,
+): ModelSetting | undefined {
+  if (typeof modelSetting !== 'string') {
+    return modelSetting
+  }
+  return normalizeThirdPartyModelSetting(modelSetting)
+}
 
 export function getSmallFastModel(): ModelName {
   return process.env.ANTHROPIC_SMALL_FAST_MODEL || getDefaultHaikuModel()
@@ -68,6 +78,8 @@ export function getUserSpecifiedModelSetting(): ModelSetting | undefined {
     const settings = getSettings_DEPRECATED() || {}
     specifiedModel = process.env.ANTHROPIC_MODEL || settings.model || undefined
   }
+
+  specifiedModel = normalizeKnownThirdPartyModelSetting(specifiedModel)
 
   // Ignore the user-specified model if it's not in the availableModels allowlist.
   if (specifiedModel && !isModelAllowed(specifiedModel)) {
@@ -445,7 +457,7 @@ export function getPublicModelName(model: ModelName): string {
 export function parseUserSpecifiedModel(
   modelInput: ModelName | ModelAlias,
 ): ModelName {
-  const modelInputTrimmed = modelInput.trim()
+  const modelInputTrimmed = normalizeThirdPartyModelSetting(modelInput)
   const normalizedModel = modelInputTrimmed.toLowerCase()
 
   const has1mTag = has1mContext(normalizedModel)

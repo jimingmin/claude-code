@@ -128,6 +128,49 @@ export async function getAnthropicClient({
     defaultHeaders['x-anthropic-additional-protection'] = 'true'
   }
 
+  // OpenAI-compatible provider: skip Anthropic-specific auth and return adapter early.
+  // Two detection paths:
+  //   1. Explicit env var: CLAUDE_CODE_USE_OPENAI=1
+  //   2. Auto-detect: the requested model matches a configured third-party model
+  const useOpenAIEnv = isEnvTruthy(process.env.CLAUDE_CODE_USE_OPENAI)
+  let openaiApiKey = process.env.OPENAI_API_KEY || ''
+  let openaiBaseURL = process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1'
+  let useOpenAI = useOpenAIEnv
+
+  // Auto-detect third-party models from saved config
+  if (!useOpenAI && model) {
+    const { resolveThirdPartyModel } = await import(
+      '../../utils/model/thirdPartyModels.js'
+    )
+    const { getGlobalConfig } = await import('../../utils/config.js')
+    const resolved = resolveThirdPartyModel(
+      model,
+      getGlobalConfig().customProviders,
+    )
+    if (resolved) {
+      useOpenAI = true
+      openaiApiKey = resolved.apiKey
+      openaiBaseURL = resolved.baseURL
+    }
+  }
+
+  if (useOpenAI) {
+    const { createOpenAIAdapterClient } = await import('./openai-adapter.js')
+    if (!openaiApiKey) {
+      throw new Error(
+        'API key is required for the OpenAI-compatible provider. ' +
+        'Set OPENAI_API_KEY or configure via /model command.',
+      )
+    }
+    return createOpenAIAdapterClient({
+      apiKey: openaiApiKey,
+      baseURL: openaiBaseURL,
+      defaultHeaders,
+      timeout: parseInt(process.env.API_TIMEOUT_MS || String(600 * 1000), 10),
+      maxRetries: maxRetries,
+    })
+  }
+
   logForDebugging('[API:auth] OAuth token check starting')
   await checkAndRefreshOAuthTokenIfNeeded()
   logForDebugging('[API:auth] OAuth token check complete')

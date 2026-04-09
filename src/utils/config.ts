@@ -563,6 +563,9 @@ export type GlobalConfig = {
   // Additional model options for the model picker (fetched during bootstrap).
   additionalModelOptionsCache?: ModelOption[]
 
+  // Third-party provider API key configurations (persisted by /model setup).
+  customProviders?: import('./model/thirdPartyModels.js').CustomProviderConfig[]
+
   // Disk cache for /api/claude_code/organizations/metrics_enabled.
   // Org-level settings change rarely; persisting across processes avoids a
   // cold API call on every `claude -p` invocation.
@@ -663,6 +666,7 @@ export const GLOBAL_CONFIG_KEYS = [
   'prStatusFooterEnabled',
   'remoteControlAtStartup',
   'remoteDialogSeen',
+  'customProviders',
 ] as const
 
 export type GlobalConfigKey = (typeof GLOBAL_CONFIG_KEYS)[number]

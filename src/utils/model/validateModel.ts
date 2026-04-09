@@ -10,6 +10,7 @@ import {
   AuthenticationError,
 } from '@anthropic-ai/sdk'
 import { getModelStrings } from './modelStrings.js'
+import { normalizeThirdPartyModelSetting } from './thirdPartyModels.js'
 
 // Cache valid models to avoid repeated API calls
 const validModelCache = new Map<string, boolean>()
@@ -20,7 +21,7 @@ const validModelCache = new Map<string, boolean>()
 export async function validateModel(
   model: string,
 ): Promise<{ valid: boolean; error?: string }> {
-  const normalizedModel = model.trim()
+  const normalizedModel = normalizeThirdPartyModelSetting(model)
 
   // Empty model is invalid
   if (!normalizedModel) {

@@ -95,6 +95,23 @@ function isManagedOAuthContext(): boolean {
   )
 }
 
+/**
+ * Check if the user has any third-party OpenAI-compatible providers configured
+ * in their global config (~/.claude.json). If so, they can use the tool without
+ * Anthropic auth.
+ */
+function hasConfiguredThirdPartyProviders(): boolean {
+  try {
+    const config = getGlobalConfig()
+    const customProviders = (config as any).customProviders as
+      | Array<{ providerId: string; apiKey: string }>
+      | undefined
+    return !!customProviders?.some(c => c.apiKey)
+  } catch {
+    return false
+  }
+}
+
 /** Whether we are supporting direct 1P auth. */
 // this code is closely related to getAuthTokenSource
 export function isAnthropicAuthEnabled(): boolean {
@@ -115,7 +132,9 @@ export function isAnthropicAuthEnabled(): boolean {
   const is3P =
     isEnvTruthy(process.env.CLAUDE_CODE_USE_BEDROCK) ||
     isEnvTruthy(process.env.CLAUDE_CODE_USE_VERTEX) ||
-    isEnvTruthy(process.env.CLAUDE_CODE_USE_FOUNDRY)
+    isEnvTruthy(process.env.CLAUDE_CODE_USE_FOUNDRY) ||
+    isEnvTruthy(process.env.CLAUDE_CODE_USE_OPENAI) ||
+    hasConfiguredThirdPartyProviders()
 
   // Check if user has configured an external API key source
   // This allows externally-provided API keys to work (without requiring proxy configuration)

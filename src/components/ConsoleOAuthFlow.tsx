@@ -5,14 +5,21 @@ import { installOAuthTokens } from '../cli/handlers/auth.js';
 import { useTerminalSize } from '../hooks/useTerminalSize.js';
 import { setClipboard } from '../ink/termio/osc.js';
 import { useTerminalNotification } from '../ink/useTerminalNotification.js';
-import { Box, Link, Text } from '../ink.js';
+import { Box, Link, Text, useInput } from '../ink.js';
 import { useKeybinding } from '../keybindings/useKeybinding.js';
 import { getSSLErrorHint } from '../services/api/errorUtils.js';
 import { sendNotification } from '../services/notifier.js';
 import { OAuthService } from '../services/oauth/index.js';
 import { getOauthAccountInfo, validateForceLoginOrg } from '../utils/auth.js';
+import { saveGlobalConfig } from '../utils/config.js';
 import { logError } from '../utils/log.js';
-import { getSettings_DEPRECATED } from '../utils/settings/settings.js';
+import { PreflightStep } from '../utils/preflightChecks.js';
+import { getSettings_DEPRECATED, updateSettingsForSource } from '../utils/settings/settings.js';
+import {
+  THIRD_PARTY_PROVIDERS,
+  getModelsForProvider,
+  type CustomProviderConfig,
+} from '../utils/model/thirdPartyModels.js';
 import { Select } from './CustomSelect/select.js';
 import { KeyboardShortcutHint } from './design-system/KeyboardShortcutHint.js';
 import { Spinner } from './Spinner.js';
@@ -29,6 +36,12 @@ type OAuthStatus = {
 | {
   state: 'platform_setup';
 } // Show platform setup info (Bedrock/Vertex/Foundry)
+| {
+  state: 'openai_setup';
+} // Show third-party OpenAI-compatible provider setup
+| {
+  state: 'openai_setup_done';
+} // Third-party provider configured, ready to continue
 | {
   state: 'ready_to_start';
 } // Flow started, waiting for browser to open
@@ -89,6 +102,7 @@ export function ConsoleOAuthFlow({
   // copy the code from the browser and paste it in the terminal
   const [showPastePrompt, setShowPastePrompt] = useState(false);
   const [urlCopied, setUrlCopied] = useState(false);
+  const [hasCompletedConnectivityCheck, setHasCompletedConnectivityCheck] = useState(false);
   const textInputColumns = useTerminalSize().columns - PASTE_HERE_MSG.length - 1;
 
   // Log forced login method on mount
@@ -127,6 +141,14 @@ export function ConsoleOAuthFlow({
   }, {
     context: 'Confirmation',
     isActive: oauthStatus.state === 'platform_setup'
+  });
+
+  // Handle Enter to continue after third-party provider setup
+  useKeybinding('confirm:yes', () => {
+    onDone();
+  }, {
+    context: 'Confirmation',
+    isActive: oauthStatus.state === 'openai_setup_done'
   });
 
   // Handle Enter to retry on error state
@@ -263,14 +285,16 @@ export function ConsoleOAuthFlow({
   }, [oauthService, setShowPastePrompt, loginWithClaudeAi, mode, orgUUID]);
   const pendingOAuthStartRef = useRef(false);
   useEffect(() => {
-    if (oauthStatus.state === 'ready_to_start' && !pendingOAuthStartRef.current) {
+    if (oauthStatus.state === 'ready_to_start' && hasCompletedConnectivityCheck && !pendingOAuthStartRef.current) {
       pendingOAuthStartRef.current = true;
       process.nextTick((startOAuth_0: () => Promise<void>, pendingOAuthStartRef_0: React.MutableRefObject<boolean>) => {
         void startOAuth_0();
         pendingOAuthStartRef_0.current = false;
       }, startOAuth, pendingOAuthStartRef);
     }
-  }, [oauthStatus.state, startOAuth]);
+  }, [oauthStatus.state, hasCompletedConnectivityCheck, startOAuth]);
+
+  const shouldRunConnectivityCheck = oauthStatus.state === 'ready_to_start' && !hasCompletedConnectivityCheck;
 
   // Auto-exit for setup-token mode
   useEffect(() => {
@@ -325,10 +349,145 @@ export function ConsoleOAuthFlow({
             </Box>
           </Box>}
       <Box paddingLeft={1} flexDirection="column" gap={1}>
-        <OAuthStatusMessage oauthStatus={oauthStatus} mode={mode} startingMessage={startingMessage} forcedMethodMessage={forcedMethodMessage} showPastePrompt={showPastePrompt} pastedCode={pastedCode} setPastedCode={setPastedCode} cursorOffset={cursorOffset} setCursorOffset={setCursorOffset} textInputColumns={textInputColumns} handleSubmitCode={handleSubmitCode} setOAuthStatus={setOAuthStatus} setLoginWithClaudeAi={setLoginWithClaudeAi} />
+        {shouldRunConnectivityCheck ? <PreflightStep onSuccess={() => {
+        setHasCompletedConnectivityCheck(true);
+      }} /> : <OAuthStatusMessage oauthStatus={oauthStatus} mode={mode} startingMessage={startingMessage} forcedMethodMessage={forcedMethodMessage} showPastePrompt={showPastePrompt} pastedCode={pastedCode} setPastedCode={setPastedCode} cursorOffset={cursorOffset} setCursorOffset={setCursorOffset} textInputColumns={textInputColumns} handleSubmitCode={handleSubmitCode} setOAuthStatus={setOAuthStatus} setLoginWithClaudeAi={setLoginWithClaudeAi} onDone={onDone} />}
       </Box>
     </Box>;
 }
+
+// ---------------------------------------------------------------------------
+// Inline third-party OpenAI-compatible provider setup
+// ---------------------------------------------------------------------------
+
+function OpenAIProviderSetupKeyInput({
+  provider,
+  onSubmit,
+  onCancel,
+}: {
+  provider: { id: string; name: string; baseURL: string; apiKeyEnvHint: string };
+  onSubmit: (key: string) => void;
+  onCancel: () => void;
+}) {
+  const [value, setValue] = useState('');
+  useInput((input: string, key: any) => {
+    if (key.escape) {
+      onCancel();
+      return;
+    }
+    if (key.return) {
+      onSubmit(value);
+      return;
+    }
+    if (key.backspace || key.delete) {
+      setValue(prev => prev.slice(0, -1));
+      return;
+    }
+    if (input) {
+      setValue(prev => prev + input);
+    }
+  });
+
+  const masked =
+    value.length <= 4
+      ? '*'.repeat(value.length)
+      : '*'.repeat(value.length - 4) + value.slice(-4);
+
+  const models = getModelsForProvider(provider.id);
+  return (
+    <Box flexDirection="column" gap={1}>
+      <Text bold>{provider.name} — Enter API Key</Text>
+      <Text dimColor>
+        Available models: {models.map(m => m.label).join(', ')}
+      </Text>
+      <Text dimColor>
+        You can also set the {provider.apiKeyEnvHint} environment variable.
+      </Text>
+      <Box>
+        <Text>API Key: </Text>
+        <Text>{masked || <Text dimColor>(paste or type your API key, Esc to go back)</Text>}</Text>
+      </Box>
+    </Box>
+  );
+}
+
+function OpenAIProviderSetup({
+  onConfigured,
+  onBack,
+}: {
+  onConfigured: () => void;
+  onBack: () => void;
+}) {
+  const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
+
+  const providers = THIRD_PARTY_PROVIDERS.filter(p => p.id !== 'custom');
+  const options = providers.map(p => ({
+    label: p.name,
+    value: p.id,
+    description: p.baseURL,
+  }));
+
+  if (!selectedProvider) {
+    return (
+      <Box flexDirection="column" gap={1}>
+        <Text bold>Configure Third-Party Model Provider</Text>
+        <Text dimColor>Select a provider to configure its API key:</Text>
+        <Box>
+          <Select
+            options={options}
+            onChange={(val: string) => {
+              setSelectedProvider(val);
+            }}
+          />
+        </Box>
+      </Box>
+    );
+  }
+
+  const provider = THIRD_PARTY_PROVIDERS.find(p => p.id === selectedProvider);
+  if (!provider) return null;
+
+  return (
+    <OpenAIProviderSetupKeyInput
+      provider={provider}
+      onSubmit={(key: string) => {
+        if (!key.trim()) {
+          onBack();
+          return;
+        }
+        // Save to global config
+        saveGlobalConfig(current => {
+          const existing: CustomProviderConfig[] =
+            (current as any).customProviders || [];
+          const filtered = existing.filter(
+            c => c.providerId !== provider.id,
+          );
+          return {
+            ...current,
+            customProviders: [
+              ...filtered,
+              {
+                providerId: provider.id,
+                apiKey: key.trim(),
+                baseURL: provider.baseURL,
+              },
+            ],
+          };
+        });
+        // Set the first available model from this provider as the default
+        const models = getModelsForProvider(provider.id);
+        if (models.length > 0) {
+          updateSettingsForSource('userSettings', { model: models[0]!.modelId });
+        }
+        // Set env var so auth check treats this as 3P for this session
+        process.env.CLAUDE_CODE_USE_OPENAI = '1';
+        onConfigured();
+      }}
+      onCancel={onBack}
+    />
+  );
+}
+
 type OAuthStatusMessageProps = {
   oauthStatus: OAuthStatus;
   mode: 'login' | 'setup-token';
@@ -343,6 +502,7 @@ type OAuthStatusMessageProps = {
   handleSubmitCode: (value: string, url: string) => void;
   setOAuthStatus: (status: OAuthStatus) => void;
   setLoginWithClaudeAi: (value: boolean) => void;
+  onDone: () => void;
 };
 function OAuthStatusMessage(t0) {
   const $ = _c(51);
@@ -359,7 +519,8 @@ function OAuthStatusMessage(t0) {
     textInputColumns,
     handleSubmitCode,
     setOAuthStatus,
-    setLoginWithClaudeAi
+    setLoginWithClaudeAi,
+    onDone
   } = t0;
   switch (oauthStatus.state) {
     case "idle":
@@ -405,6 +566,9 @@ function OAuthStatusMessage(t0) {
           t6 = [t4, t5, {
             label: <Text>3rd-party platform ·{" "}<Text dimColor={true}>Amazon Bedrock, Microsoft Foundry, or Vertex AI</Text>{"\n"}</Text>,
             value: "platform"
+          }, {
+            label: <Text>3rd-party OpenAI-compatible model ·{" "}<Text dimColor={true}>DeepSeek, Kimi, GLM, Qwen, Gemini, etc.</Text>{"\n"}</Text>,
+            value: "openai_compatible"
           }];
           $[5] = t6;
         } else {
@@ -417,6 +581,11 @@ function OAuthStatusMessage(t0) {
                 logEvent("tengu_oauth_platform_selected", {});
                 setOAuthStatus({
                   state: "platform_setup"
+                });
+              } else if (value_0 === "openai_compatible") {
+                logEvent("tengu_oauth_openai_compatible_selected", {});
+                setOAuthStatus({
+                  state: "openai_setup"
                 });
               } else {
                 setOAuthStatus({
@@ -621,6 +790,23 @@ function OAuthStatusMessage(t0) {
           t3 = $[50];
         }
         return t3;
+      }
+    case "openai_setup":
+      {
+        return <OpenAIProviderSetup onConfigured={() => {
+          setOAuthStatus({ state: "openai_setup_done" });
+        }} onBack={() => {
+          setOAuthStatus({ state: "idle" });
+        }} />;
+      }
+    case "openai_setup_done":
+      {
+        return <Box flexDirection="column" gap={1}>
+          <Text color="success">Third-party provider configured successfully!</Text>
+          <Text dimColor>You can use <Text bold>/model</Text> to switch between models after startup.</Text>
+          <Text dimColor>You can use <Text bold>/provider</Text> to manage provider API keys.</Text>
+          <Box marginTop={1}><Text color="success">Press <Text bold>Enter</Text> to continue…</Text></Box>
+        </Box>;
       }
     default:
       {
