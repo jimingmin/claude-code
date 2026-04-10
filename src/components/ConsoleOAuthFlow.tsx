@@ -804,7 +804,7 @@ function OAuthStatusMessage(t0) {
         return <Box flexDirection="column" gap={1}>
           <Text color="success">Third-party provider configured successfully!</Text>
           <Text dimColor>You can use <Text bold>/model</Text> to switch between models after startup.</Text>
-          <Text dimColor>You can use <Text bold>/provider</Text> to manage provider API keys.</Text>
+          <Text dimColor>You can use <Text bold>/provider</Text> to manage provider API keys and base URLs.</Text>
           <Box marginTop={1}><Text color="success">Press <Text bold>Enter</Text> to continue…</Text></Box>
         </Box>;
       }

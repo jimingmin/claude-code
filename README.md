@@ -48,6 +48,37 @@ bun run build
 
 构建产物输出到 `dist/cli.js`（~25.75 MB，5326 模块）。
 
+### 第三方 Provider 配置
+
+现在可以通过 `/provider` 统一管理第三方 OpenAI-compatible provider 的 API Key 和 Base URL。
+
+```bash
+# 交互式配置 provider / API Key / Base URL
+/provider
+
+# 查看当前 provider 配置摘要
+/provider list
+
+# 直接设置 API Key，并可选覆盖 Base URL
+/provider openai sk-xxx
+/provider openai sk-xxx https://my-proxy.example.com/v1
+
+# 自定义 OpenAI-compatible endpoint：API Key + Base URL + 默认模型 ID
+/provider custom sk-xxx https://my-proxy.example.com/v1 gpt-4.1
+
+# 只更新 Base URL，保留现有 API Key
+/provider openai --base-url https://my-proxy.example.com/v1
+
+# 自定义 endpoint：只更新默认模型 ID
+/provider custom --model gpt-4.1-mini
+
+# 恢复 provider 默认 Base URL
+/provider openai --reset-base-url
+
+# 删除某个 provider 的保存配置
+/provider remove openai
+```
+
 ## 架构速览
 
 ### 启动与核心链路

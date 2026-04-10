@@ -7,6 +7,7 @@
  */
 
 import type { ModelOption } from './modelOptions.js'
+import { isModelAlias } from './aliases.js'
 
 export interface ThirdPartyProvider {
   /** Internal provider ID (used as key in config storage) */
@@ -181,6 +182,28 @@ export interface CustomProviderConfig {
   apiKey: string
   /** Override base URL (optional, uses provider default if empty) */
   baseURL?: string
+  /** Default model ID for custom OpenAI-compatible providers */
+  modelId?: string
+}
+
+const CUSTOM_PROVIDER_ID = 'custom'
+
+function normalizeStoredModelId(modelId: string | undefined): string | undefined {
+  const trimmed = modelId?.trim()
+  return trimmed ? trimmed : undefined
+}
+
+function isExactModelMatch(left: string, right: string): boolean {
+  return left === right || left.toLowerCase() === right.toLowerCase()
+}
+
+function looksLikeAnthropicModelInput(modelId: string): boolean {
+  const normalized = modelId.trim().toLowerCase().replace(/\[1m\]$/i, '')
+  return (
+    isModelAlias(normalized) ||
+    normalized.includes('claude') ||
+    normalized.includes('anthropic')
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -197,6 +220,14 @@ export function getModelsForProvider(
   providerId: string,
 ): ThirdPartyModelDef[] {
   return THIRD_PARTY_MODELS.filter(m => m.providerId === providerId)
+}
+
+export function getCustomProviderModelId(
+  customProviders: CustomProviderConfig[] | undefined,
+): string | undefined {
+  return normalizeStoredModelId(
+    getCustomProviderConfig(customProviders, CUSTOM_PROVIDER_ID)?.modelId,
+  )
 }
 
 export function normalizeThirdPartyModelId(modelId: string): string {
@@ -253,21 +284,71 @@ export function getCustomProviderConfig(
 export function resolveThirdPartyModel(
   modelId: string,
   customProviders: CustomProviderConfig[] | undefined,
-): { model: ThirdPartyModelDef; provider: ThirdPartyProvider; apiKey: string; baseURL: string } | null {
-  const normalizedModelId = normalizeThirdPartyModelId(modelId)
+): { modelId: string; provider: ThirdPartyProvider; apiKey: string; baseURL: string } | null {
+  const requestedModelId = modelId.trim()
+  if (!requestedModelId) return null
+
+  const customProvider = getProviderById(CUSTOM_PROVIDER_ID)
+  const customConfig = getCustomProviderConfig(customProviders, CUSTOM_PROVIDER_ID)
+  const customApiKey =
+    customConfig?.apiKey || process.env.OPENAI_API_KEY || ''
+  const customBaseURL =
+    customConfig?.baseURL || process.env.OPENAI_BASE_URL || ''
+  const configuredCustomModelId = normalizeStoredModelId(customConfig?.modelId)
+
+  if (
+    customProvider &&
+    customApiKey &&
+    customBaseURL &&
+    configuredCustomModelId &&
+    isExactModelMatch(requestedModelId, configuredCustomModelId)
+  ) {
+    return {
+      modelId: requestedModelId,
+      provider: customProvider,
+      apiKey: customApiKey,
+      baseURL: customBaseURL,
+    }
+  }
+
+  const normalizedModelId = normalizeThirdPartyModelId(requestedModelId)
   const modelDef = THIRD_PARTY_MODELS.find(m => m.modelId === normalizedModelId)
-  if (!modelDef) return null
+  if (modelDef) {
+    const provider = getProviderById(modelDef.providerId)
+    if (!provider) return null
 
-  const provider = getProviderById(modelDef.providerId)
-  if (!provider) return null
+    const userConfig = getCustomProviderConfig(customProviders, provider.id)
+    const apiKey =
+      userConfig?.apiKey ||
+      process.env[provider.apiKeyEnvHint] ||
+      process.env.OPENAI_API_KEY ||
+      ''
+    if (!apiKey) return null
 
-  // Check user config first, then env var
-  const userConfig = getCustomProviderConfig(customProviders, provider.id)
-  const apiKey = userConfig?.apiKey || process.env[provider.apiKeyEnvHint] || process.env.OPENAI_API_KEY || ''
-  if (!apiKey) return null
+    const baseURL = userConfig?.baseURL || provider.baseURL
+    return {
+      modelId: modelDef.modelId,
+      provider,
+      apiKey,
+      baseURL,
+    }
+  }
 
-  const baseURL = userConfig?.baseURL || provider.baseURL
-  return { model: modelDef, provider, apiKey, baseURL }
+  if (
+    customProvider &&
+    customApiKey &&
+    customBaseURL &&
+    !looksLikeAnthropicModelInput(requestedModelId)
+  ) {
+    return {
+      modelId: requestedModelId,
+      provider: customProvider,
+      apiKey: customApiKey,
+      baseURL: customBaseURL,
+    }
+  }
+
+  return null
 }
 
 /**
@@ -285,7 +366,15 @@ export function getThirdPartyModelOptions(
   customProviders: CustomProviderConfig[] | undefined,
 ): ModelOption[] {
   const configuredIds = getConfiguredProviderIds(customProviders)
-  if (configuredIds.size === 0) return []
+  const customModelId = getCustomProviderModelId(customProviders)
+  const hasCustomProviderAccess = Boolean(
+    customModelId &&
+      (getCustomProviderConfig(customProviders, CUSTOM_PROVIDER_ID)?.apiKey ||
+        process.env.OPENAI_API_KEY) &&
+      (getCustomProviderConfig(customProviders, CUSTOM_PROVIDER_ID)?.baseURL ||
+        process.env.OPENAI_BASE_URL),
+  )
+  if (configuredIds.size === 0 && !hasCustomProviderAccess) return []
 
   const options: ModelOption[] = []
   for (const model of THIRD_PARTY_MODELS) {
@@ -298,5 +387,14 @@ export function getThirdPartyModelOptions(
       })
     }
   }
+
+  if (customModelId && hasCustomProviderAccess) {
+    options.push({
+      value: customModelId,
+      label: customModelId,
+      description: 'Custom OpenAI-compatible model',
+    })
+  }
+
   return options
 }
