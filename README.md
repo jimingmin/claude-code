@@ -48,6 +48,21 @@ bun run build
 
 构建产物输出到 `dist/cli.js`（~25.75 MB，5326 模块）。
 
+### 内部流程日志
+
+为了便于研究运行链路，当前版本会按会话把内部流程写入：`~/.claude/internal-flow/<session-id>.jsonl`。
+
+日志按 JSONL 逐行记录，重点包含以下事件：
+
+- `agent_selected`：主线程或 subagent 实际选中了哪个 agent，以及它来自 built-in / user / project / plugin 的哪一层
+- `prompt_snapshot`：某个 system prompt 首次出现时的完整文本快照（按 hash 去重）
+- `query_started`：一次真实 query 开始时使用了哪个 prompt hash、属于主线程还是 subagent、来自哪个 `querySource`
+- `skill_invoked`：skill / prompt command 的实际使用记录，区分用户 slash、`SkillTool` inline、`SkillTool` fork、remote skill、agent preload 等来源
+
+可以直接在会话里使用 `/flow-log`（别名：`/internal-flow`）查看当前会话对应的日志文件路径。
+
+注意：`prompt_snapshot` 会包含完整 system prompt 文本，可能带有本地 `CLAUDE.md`、memory、附加 system prompt 等敏感内容，请把该日志视为本地敏感文件。
+
 ### 第三方 Provider 配置
 
 现在可以通过 `/provider` 统一管理第三方 OpenAI-compatible provider 的 API Key 和 Base URL。

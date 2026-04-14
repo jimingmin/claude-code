@@ -53,6 +53,7 @@ import {
   prepareForkedCommandContext,
 } from '../../utils/forkedAgent.js'
 import { parseFrontmatter } from '../../utils/frontmatterParser.js'
+import { logSkillInvocation } from '../../utils/internalFlowLogger.js'
 import { lazySchema } from '../../utils/lazySchema.js'
 import { createUserMessage, normalizeMessages } from '../../utils/messages.js'
 import type { ModelAlias } from '../../utils/model/aliases.js'
@@ -204,6 +205,18 @@ async function executeForkedSkill(
 
   const { modifiedGetAppState, baseAgent, promptMessages, skillContent } =
     await prepareForkedCommandContext(command, args || '', context)
+  const skillPath = command.source ? `${command.source}:${command.name}` : command.name
+  logSkillInvocation({
+    skillName: command.name,
+    skillPath,
+    source: 'skill-tool-fork',
+    args,
+    agentId,
+    agentType: baseAgent.agentType,
+    commandSource: command.source,
+    loadedFrom: command.loadedFrom,
+    promptText: skillContent,
+  })
 
   // Merge skill's effort into the agent definition so runAgent applies it
   const agentDefinition =
@@ -641,6 +654,8 @@ export const SkillTool: Tool<InputSchema, Output, Progress> = buildTool({
       args || '', // Pass args if provided
       commands,
       context,
+      [],
+      'skill-tool-inline',
     )
 
     if (!processedCommand.shouldQuery) {
@@ -1092,6 +1107,16 @@ async function executeRemoteSkill(
     finalContent,
     getAgentContext()?.agentId ?? null,
   )
+  logSkillInvocation({
+    skillName: commandName,
+    skillPath,
+    source: 'skill-tool-remote',
+    agentId: getAgentContext()?.agentId ?? undefined,
+    agentType: context.agentType,
+    commandSource: 'remote',
+    loadedFrom: 'remote',
+    promptText: finalContent,
+  })
 
   // Direct injection — wrap SKILL.md content in a meta user message. Matches
   // the shape of what processPromptSlashCommand produces for simple skills.

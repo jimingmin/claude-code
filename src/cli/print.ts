@@ -187,6 +187,7 @@ import {
   type PromptVariant,
 } from 'src/services/PromptSuggestion/promptSuggestion.js'
 import { getLastCacheSafeParams } from 'src/utils/forkedAgent.js'
+import { logAgentSelection } from 'src/utils/internalFlowLogger.js'
 import { getAccountInformation } from 'src/utils/auth.js'
 import { OAuthService } from 'src/services/oauth/index.js'
 import { installOAuthTokens } from 'src/cli/handlers/auth.js'
@@ -713,6 +714,11 @@ export async function runHeadless(
       { activeAgents: agents, allAgents: agents },
     )
     if (restoredAgent) {
+      logAgentSelection({
+        agent: restoredAgent,
+        scope: 'main',
+        selectionSource: 'resume',
+      })
       setAppState(prev => ({ ...prev, agent: restoredAgent.agentType }))
       // Apply the agent's system prompt for non-built-in agents (mirrors main.tsx initial --agent path)
       if (!options.systemPrompt && !isBuiltInAgent(restoredAgent)) {
@@ -4398,6 +4404,11 @@ async function handleInitializeRequest(
     if (mainThreadAgent && !alreadyResolved) {
       // Update the main thread agent type in bootstrap state
       setMainThreadAgentType(mainThreadAgent.agentType)
+      logAgentSelection({
+        agent: mainThreadAgent,
+        scope: 'main',
+        selectionSource: 'sdk',
+      })
 
       // Apply the agent's system prompt if user hasn't specified a custom one
       // SDK agents are always custom agents (not built-in), so getSystemPrompt() takes no args

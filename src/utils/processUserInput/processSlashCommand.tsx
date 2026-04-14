@@ -29,6 +29,7 @@ import { getFsImplementation } from '../fsOperations.js';
 import { isFullscreenEnvEnabled } from '../fullscreen.js';
 import { toArray } from '../generators.js';
 import { registerSkillHooks } from '../hooks/registerSkillHooks.js';
+import { logSkillInvocation, type SkillInvocationSource } from '../internalFlowLogger.js';
 import { logError } from '../log.js';
 import { enqueuePendingNotification } from '../messageQueueManager.js';
 import { createCommandInputMessage, createSyntheticUserCaveatMessage, createSystemMessage, createUserInterruptionMessage, createUserMessage, formatCommandInputTags, isCompactBoundaryMessage, isSystemLocalCommandMessage, normalizeMessages, prepareUserContent } from '../messages.js';
@@ -79,6 +80,18 @@ async function executeForkedSlashCommand(command: CommandBase & PromptCommand, a
     baseAgent,
     promptMessages
   } = await prepareForkedCommandContext(command, args, context);
+  const skillPath = command.source ? `${command.source}:${command.name}` : command.name;
+  logSkillInvocation({
+    skillName: command.name,
+    skillPath,
+    source: 'slash-command-fork',
+    args,
+    agentId,
+    agentType: baseAgent.agentType,
+    commandSource: command.source,
+    loadedFrom: command.loadedFrom,
+    promptText: skillContent
+  });
 
   // Merge skill's effort into the agent definition so runAgent applies it
   const agentDefinition = command.effort !== undefined ? {
@@ -727,7 +740,7 @@ async function getMessagesForSlashCommand(commandName: string, args: string, set
             if (command.context === 'fork') {
               return await executeForkedSlashCommand(command, args, context, precedingInputBlocks, setToolJSX, canUseTool ?? hasPermissionsToUseTool);
             }
-            return await getMessagesForPromptSlashCommand(command, args, context, precedingInputBlocks, imageContentBlocks, uuid);
+              return await getMessagesForPromptSlashCommand(command, args, context, precedingInputBlocks, imageContentBlocks, uuid, 'slash-command');
           } catch (e) {
             // Handle abort errors specially to show proper "Interrupted" message
             if (e instanceof AbortError) {
@@ -814,7 +827,7 @@ function formatCommandLoadingMetadata(command: CommandBase & PromptCommand, args
   }
   return formatSlashCommandLoadingMetadata(command.name, args);
 }
-export async function processPromptSlashCommand(commandName: string, args: string, commands: Command[], context: ToolUseContext, imageContentBlocks: ContentBlockParam[] = []): Promise<SlashCommandResult> {
+export async function processPromptSlashCommand(commandName: string, args: string, commands: Command[], context: ToolUseContext, imageContentBlocks: ContentBlockParam[] = [], invocationSource: SkillInvocationSource = 'skill-tool-inline'): Promise<SlashCommandResult> {
   const command = findCommand(commandName, commands);
   if (!command) {
     throw new MalformedCommandError(`Unknown command: ${commandName}`);
@@ -822,9 +835,9 @@ export async function processPromptSlashCommand(commandName: string, args: strin
   if (command.type !== 'prompt') {
     throw new Error(`Unexpected ${command.type} command. Expected 'prompt' command. Use /${commandName} directly in the main conversation.`);
   }
-  return getMessagesForPromptSlashCommand(command, args, context, [], imageContentBlocks);
+  return getMessagesForPromptSlashCommand(command, args, context, [], imageContentBlocks, undefined, invocationSource);
 }
-async function getMessagesForPromptSlashCommand(command: CommandBase & PromptCommand, args: string, context: ToolUseContext, precedingInputBlocks: ContentBlockParam[] = [], imageContentBlocks: ContentBlockParam[] = [], uuid?: string): Promise<SlashCommandResult> {
+async function getMessagesForPromptSlashCommand(command: CommandBase & PromptCommand, args: string, context: ToolUseContext, precedingInputBlocks: ContentBlockParam[] = [], imageContentBlocks: ContentBlockParam[] = [], uuid?: string, invocationSource: SkillInvocationSource = 'slash-command'): Promise<SlashCommandResult> {
   // In coordinator mode (main thread only), skip loading the full skill content
   // and permissions. The coordinator only has Agent + TaskStop tools, so the
   // skill content and allowedTools are useless. Instead, send a brief summary
@@ -883,6 +896,17 @@ async function getMessagesForPromptSlashCommand(command: CommandBase & PromptCom
   const skillPath = command.source ? `${command.source}:${command.name}` : command.name;
   const skillContent = result.filter((b): b is TextBlockParam => b.type === 'text').map(b => b.text).join('\n\n');
   addInvokedSkill(command.name, skillPath, skillContent, getAgentContext()?.agentId ?? null);
+  logSkillInvocation({
+    skillName: command.name,
+    skillPath,
+    source: invocationSource,
+    args,
+    agentId: getAgentContext()?.agentId ?? undefined,
+    agentType: context.agentType,
+    commandSource: command.source,
+    loadedFrom: command.loadedFrom,
+    promptText: skillContent
+  });
   const metadata = formatCommandLoadingMetadata(command, args);
   const additionalAllowedTools = parseToolListFromCLI(command.allowedTools ?? []);
 

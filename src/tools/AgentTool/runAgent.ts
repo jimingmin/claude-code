@@ -55,6 +55,10 @@ import {
 import { registerFrontmatterHooks } from '../../utils/hooks/registerFrontmatterHooks.js'
 import { clearSessionHooks } from '../../utils/hooks/sessionHooks.js'
 import { executeSubagentStartHooks } from '../../utils/hooks.js'
+import {
+  logAgentSelection,
+  logSkillInvocation,
+} from '../../utils/internalFlowLogger.js'
 import { createUserMessage } from '../../utils/messages.js'
 import { getAgentModel } from '../../utils/model/agent.js'
 import type { ModelAlias } from '../../utils/model/aliases.js'
@@ -346,6 +350,13 @@ export async function* runAgent({
 
   const agentId = override?.agentId ? override.agentId : createAgentId()
 
+  logAgentSelection({
+    agent: agentDefinition,
+    scope: 'subagent',
+    agentId,
+    querySource,
+  })
+
   // Route this agent's transcript into a grouping subdirectory if requested
   // (e.g. workflow subagents write to subagents/workflows/<runId>/).
   if (transcriptSubdir) {
@@ -629,6 +640,22 @@ export async function* runAgent({
       logForDebugging(
         `[Agent: ${agentDefinition.agentType}] Preloaded skill '${skillName}'`,
       )
+
+      const skillText = content
+        .map(block => (block.type === 'text' ? block.text : ''))
+        .filter(Boolean)
+        .join('\n\n')
+      const skillPath = skill.source ? `${skill.source}:${skill.name}` : skill.name
+      logSkillInvocation({
+        skillName: skill.name,
+        skillPath,
+        source: 'agent-preload',
+        agentId,
+        agentType: agentDefinition.agentType,
+        commandSource: skill.source,
+        loadedFrom: skill.loadedFrom,
+        promptText: skillText,
+      })
 
       // Add command-message metadata so the UI shows which skill is loading
       const metadata = formatSkillLoadingMetadata(

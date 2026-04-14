@@ -77,6 +77,7 @@ import {
 } from './utils/messageQueueManager.js'
 import { notifyCommandLifecycle } from './utils/commandLifecycle.js'
 import { headlessProfilerCheckpoint } from './utils/headlessProfiler.js'
+import { logQueryFlow } from './utils/internalFlowLogger.js'
 import {
   getRuntimeMainLoopModel,
   renderModelName,
@@ -302,6 +303,14 @@ async function* queryLoop(
     state.messages,
     state.toolUseContext,
   )
+
+  logQueryFlow({
+    querySource,
+    systemPrompt,
+    userContext,
+    systemContext,
+    toolUseContext: state.toolUseContext,
+  })
 
   // eslint-disable-next-line no-constant-condition
   while (true) {
